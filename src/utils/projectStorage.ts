@@ -1,7 +1,8 @@
-import { Project, SourceFile } from "@/types";
+import { Project, SourceFile, DataPack } from "@/types";
 
 const STORAGE_KEY_PROJECTS = "edu_projects_store_v1";
 const STORAGE_PREFIX_SOURCES = "edu_sources_store_v1_";
+const STORAGE_PREFIX_DATAPACK = "edu_datapack_store_v1_";
 
 /**
  * Lấy danh sách dự án đã lưu trong localStorage của trình duyệt
@@ -102,5 +103,31 @@ export async function syncProjectToServer(project: Project, sources?: SourceFile
     return Boolean(json.ok);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Lưu trữ DATA PACK vào localStorage
+ */
+export function saveDataPackLocal(projectId: string, dataPack: DataPack): void {
+  if (typeof window === "undefined" || !projectId) return;
+  try {
+    localStorage.setItem(`${STORAGE_PREFIX_DATAPACK}${projectId}`, JSON.stringify(dataPack));
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Lấy DATA PACK từ localStorage
+ */
+export function getDataPackLocal(projectId: string): DataPack | null {
+  if (typeof window === "undefined" || !projectId) return null;
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX_DATAPACK}${projectId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as DataPack;
+  } catch {
+    return null;
   }
 }

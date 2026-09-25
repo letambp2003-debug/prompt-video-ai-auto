@@ -14,15 +14,19 @@ import {
   Loader2,
   FileCheck,
   Info,
+  AlertCircle,
 } from "lucide-react";
-import { Project, SourceFile } from "@/types";
+import { Project, SourceFile, DataPack } from "@/types";
 import { ProjectStepper } from "@/components/project/ProjectStepper";
 import { UploadZone } from "@/components/project/UploadZone";
+import { DataPackViewer } from "@/components/project/DataPackViewer";
 import {
   getProjectLocal,
   saveProjectLocal,
   getSourcesLocal,
   saveSourcesLocal,
+  getDataPackLocal,
+  saveDataPackLocal,
   syncProjectToServer,
 } from "@/utils/projectStorage";
 
@@ -33,9 +37,12 @@ export default function ProjectWorkspacePage() {
 
   const [project, setProject] = useState<Project | null>(null);
   const [sources, setSources] = useState<SourceFile[]>([]);
+  const [dataPack, setDataPack] = useState<DataPack | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
+  const [activeStep, setActiveStep] = useState<"SOURCE" | "DATAPACK">("SOURCE");
   const [error, setError] = useState<string | null>(null);
-  const [showSprint2Notice, setShowSprint2Notice] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -43,9 +50,17 @@ export default function ProjectWorkspacePage() {
     // 1. Khôi phục tức thì từ localStorage nếu có để tránh giật lag hoặc mất trang khi tải lại
     const localProj = getProjectLocal(projectId);
     const localSrcs = getSourcesLocal(projectId);
+    const localDp = getDataPackLocal(projectId);
+
     if (localProj) {
       setProject(localProj);
       setSources(localSrcs);
+      if (localDp) {
+        setDataPack(localDp);
+        if (localProj.status === "DATA_PACK_READY" || localProj.status === "DATA_PACK_APPROVED") {
+          setActiveStep("DATAPACK");
+        }
+      }
       setIsLoading(false);
     }
 
@@ -61,6 +76,21 @@ export default function ProjectWorkspacePage() {
           saveProjectLocal(json.data.project);
           saveSourcesLocal(projectId, serverSources);
           setError(null);
+
+          // Nạp DATA PACK từ máy chủ nếu có
+          try {
+            const dpRes = await fetch(`/api/projects/${projectId}/datapack`);
+            const dpJson = await dpRes.json();
+            if (dpJson.ok && dpJson.data) {
+              setDataPack(dpJson.data);
+              saveDataPackLocal(projectId, dpJson.data);
+              if (json.data.project.status === "DATA_PACK_READY" || json.data.project.status === "DATA_PACK_APPROVED") {
+                setActiveStep("DATAPACK");
+              }
+            }
+          } catch {
+            // Ignore
+          }
         } else {
           // Nếu container serverless chưa có dự án nhưng client có trong localStorage -> tự động đồng bộ lên server
           if (localProj) {
@@ -82,6 +112,66 @@ export default function ProjectWorkspacePage() {
 
     fetchProjectData();
   }, [projectId]);
+
+  const handleStartAnalysis = async () => {
+    if (sources.length === 0) return;
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/analyze`, {
+        method: "POST",
+      });
+      const json = await res.json();
+
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Quá trình phân tích bài học thất bại.");
+      }
+
+      setProject(json.data.project);
+      setDataPack(json.data.dataPack);
+      saveProjectLocal(json.data.project);
+      saveDataPackLocal(projectId, json.data.dataPack);
+      setActiveStep("DATAPACK");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Đã xảy ra lỗi khi phân tích tài liệu.";
+      setAnalysisError(message);
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  const handleApproveDataPack = async () => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/datapack/approve`, {
+        method: "POST",
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Không thể xác nhận DATA PACK.");
+      }
+      setProject(json.data.project);
+      setDataPack(json.data.dataPack);
+      saveProjectLocal(json.data.project);
+      saveDataPackLocal(projectId, json.data.dataPack);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Lỗi khi duyệt DATA PACK");
+    }
+  };
+
+  const handleUpdateDataPack = async (updated: DataPack) => {
+    setDataPack(updated);
+    saveDataPackLocal(projectId, updated);
+    try {
+      await fetch(`/api/projects/${projectId}/datapack`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updated.payload),
+      });
+    } catch {
+      // Đã lưu ở local
+    }
+  };
 
   const handleUploadSuccess = (newSource: SourceFile) => {
     setSources((prev) => {
@@ -183,8 +273,77 @@ export default function ProjectWorkspacePage() {
       {/* Stepper tiến trình 8 bước */}
       <ProjectStepper taskType={project.taskType} status={project.status} />
 
-      {/* Nội dung Bước 1: Kết nối dữ liệu đầu vào */}
-      {isLesson ? (
+      {/* Tab chuyển đổi giữa Bước 1 (Nguồn bài học) và Bước 2 (DATA PACK) */}
+      {isLesson && (
+        <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+          <button
+            type="button"
+            onClick={() => setActiveStep("SOURCE")}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeStep === "SOURCE"
+                ? "bg-edu-600 text-white shadow-sm"
+                : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            <span>1. Nguồn bài học ({sources.length} tệp)</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!dataPack && sources.length === 0}
+            onClick={() => {
+              if (dataPack) {
+                setActiveStep("DATAPACK");
+              } else {
+                handleStartAnalysis();
+              }
+            }}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeStep === "DATAPACK"
+                ? "bg-edu-600 text-white shadow-sm"
+                : dataPack
+                ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>
+              2. DATA PACK {dataPack ? (dataPack.status === "APPROVED" ? "(Đã duyệt)" : "(Sẵn sàng)") : "(Chưa phân tích)"}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Hiển thị lỗi phân tích nếu có */}
+      {analysisError && (
+        <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-700 text-xs">
+          <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
+          <div className="flex-1">
+            <p className="font-bold text-sm">Lỗi phân tích bài học</p>
+            <p className="mt-0.5">{analysisError}</p>
+          </div>
+          <button
+            onClick={() => setAnalysisError(null)}
+            className="text-xs text-red-500 hover:text-red-700 underline font-semibold"
+          >
+            Đóng
+          </button>
+        </div>
+      )}
+
+      {/* Nội dung Bước 2: DATA PACK (khi đã phân tích xong) */}
+      {isLesson && activeStep === "DATAPACK" && dataPack ? (
+        <DataPackViewer
+          project={project}
+          dataPack={dataPack}
+          onApprove={handleApproveDataPack}
+          onReAnalyze={handleStartAnalysis}
+          onBackToSources={() => setActiveStep("SOURCE")}
+          onUpdateDataPack={handleUpdateDataPack}
+        />
+      ) : isLesson ? (
+        /* Nội dung Bước 1: Kết nối dữ liệu đầu vào */
         <div className="grid lg:grid-cols-3 gap-6">
           {/* Cột trái: Khu vực tải lên tài liệu */}
           <div className="lg:col-span-2 space-y-4">
@@ -211,14 +370,15 @@ export default function ProjectWorkspacePage() {
               />
             </div>
 
-            {/* Thông báo sẵn sàng Sprint 2 */}
-            {showSprint2Notice && (
-              <div className="p-4 rounded-xl bg-edu-50 border border-edu-200 flex items-start gap-3 text-edu-900 text-xs">
-                <Sparkles className="w-5 h-5 text-edu-600 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold text-sm">Tài liệu đã được kết nối & lưu trữ an toàn!</p>
-                  <p className="mt-1">
-                    Tại <strong>Sprint 2</strong>, nút <em>"PHÂN TÍCH BÀI HỌC"</em> sẽ tự động gọi AI trích xuất tri thức thành <strong>DATA PACK</strong> chuẩn hóa với đầy đủ trích dẫn trang nguồn.
+            {/* Trạng thái AI đang phân tích bài học */}
+            {isAnalyzing && (
+              <div className="p-5 rounded-2xl bg-edu-50 border border-edu-200 flex items-start gap-3.5 text-edu-950 text-xs shadow-sm">
+                <Loader2 className="w-5 h-5 text-edu-600 animate-spin flex-shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold text-sm text-edu-900">AI đang tiến hành phân tích học liệu...</p>
+                  <p className="text-slate-600 leading-relaxed">
+                    Hệ thống đang trích xuất <strong>Yêu cầu cần đạt (YCCD)</strong>, <strong>Kiến thức trọng tâm (KT)</strong>,{" "}
+                    <strong>Hiểu lầm thường gặp (SAI)</strong> và <strong>Ý tưởng Video Hook</strong>. Quá trình này mất khoảng vài giây.
                   </p>
                 </div>
               </div>
@@ -255,21 +415,32 @@ export default function ProjectWorkspacePage() {
               <div className="pt-2">
                 <button
                   type="button"
-                  disabled={sources.length === 0}
-                  onClick={() => setShowSprint2Notice(true)}
+                  disabled={sources.length === 0 || isAnalyzing}
+                  onClick={handleStartAnalysis}
                   className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm shadow-sm transition-all ${
-                    sources.length > 0
-                      ? "bg-edu-600 hover:bg-edu-700 text-white cursor-pointer"
+                    sources.length > 0 && !isAnalyzing
+                      ? "bg-edu-600 hover:bg-edu-700 text-white cursor-pointer ring-4 ring-edu-100"
                       : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
                   }`}
                 >
-                  <Sparkles className="w-4 h-4" />
-                  <span>PHÂN TÍCH BÀI HỌC</span>
-                  <ArrowRight className="w-4 h-4" />
+                  {isAnalyzing ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin text-white" />
+                      <span>AI ĐANG PHÂN TÍCH...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-4 h-4" />
+                      <span>PHÂN TÍCH BÀI HỌC</span>
+                      <ArrowRight className="w-4 h-4" />
+                    </>
+                  )}
                 </button>
                 <p className="text-[11px] text-slate-400 text-center mt-2">
                   {sources.length > 0
-                    ? "Nhấn để chuẩn bị trích xuất tri thức sang DATA PACK"
+                    ? isAnalyzing
+                      ? "Hệ thống đang chuẩn bị DATA PACK..."
+                      : "Nhấn để AI trích xuất tri thức sang DATA PACK"
                     : "Vui lòng tải lên ít nhất 1 tài liệu để tiếp tục"}
                 </p>
               </div>
@@ -342,7 +513,7 @@ export default function ProjectWorkspacePage() {
 
               <button
                 type="button"
-                onClick={() => setShowSprint2Notice(true)}
+                onClick={() => alert("Chiến dịch truyền thông đang ở trạng thái sẵn sàng. Hệ thống sẽ quét kiểm tra an toàn 12 tiêu chí chính sách.")}
                 className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-sm bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-all"
               >
                 <ShieldCheck className="w-4 h-4" />
