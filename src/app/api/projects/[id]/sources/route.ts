@@ -17,6 +17,8 @@ const DANGEROUS_EXTENSIONS = [".exe", ".bat", ".cmd", ".sh", ".msi", ".com", ".v
 
 const MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024; // 50MB
 
+export const maxDuration = 60;
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
