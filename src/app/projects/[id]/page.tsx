@@ -18,6 +18,13 @@ import {
 import { Project, SourceFile } from "@/types";
 import { ProjectStepper } from "@/components/project/ProjectStepper";
 import { UploadZone } from "@/components/project/UploadZone";
+import {
+  getProjectLocal,
+  saveProjectLocal,
+  getSourcesLocal,
+  saveSourcesLocal,
+  syncProjectToServer,
+} from "@/utils/projectStorage";
 
 export default function ProjectWorkspacePage() {
   const params = useParams();
@@ -30,45 +37,74 @@ export default function ProjectWorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [showSprint2Notice, setShowSprint2Notice] = useState(false);
 
-  const fetchProjectData = async () => {
-    try {
-      setIsLoading(true);
-      const res = await fetch(`/api/projects/${projectId}`);
-      const json = await res.json();
+  useEffect(() => {
+    if (!projectId) return;
 
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error?.message || "Không thể tải dữ liệu dự án.");
-      }
-
-      setProject(json.data.project);
-      setSources(json.data.sources || []);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Đã xảy ra lỗi khi tải dữ liệu dự án.";
-      setError(msg);
-    } finally {
+    // 1. Khôi phục tức thì từ localStorage nếu có để tránh giật lag hoặc mất trang khi tải lại
+    const localProj = getProjectLocal(projectId);
+    const localSrcs = getSourcesLocal(projectId);
+    if (localProj) {
+      setProject(localProj);
+      setSources(localSrcs);
       setIsLoading(false);
     }
-  };
 
-  useEffect(() => {
-    if (projectId) {
-      fetchProjectData();
-    }
+    const fetchProjectData = async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}`);
+        const json = await res.json();
+
+        if (res.ok && json.ok && json.data?.project) {
+          setProject(json.data.project);
+          const serverSources = json.data.sources || [];
+          setSources(serverSources);
+          saveProjectLocal(json.data.project);
+          saveSourcesLocal(projectId, serverSources);
+          setError(null);
+        } else {
+          // Nếu container serverless chưa có dự án nhưng client có trong localStorage -> tự động đồng bộ lên server
+          if (localProj) {
+            await syncProjectToServer(localProj, localSrcs);
+            setError(null);
+          } else {
+            throw new Error(json.error?.message || "Không thể tải dữ liệu dự án.");
+          }
+        }
+      } catch (err: unknown) {
+        if (!localProj) {
+          const msg = err instanceof Error ? err.message : "Đã xảy ra lỗi khi tải dữ liệu dự án.";
+          setError(msg);
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchProjectData();
   }, [projectId]);
 
   const handleUploadSuccess = (newSource: SourceFile) => {
-    setSources((prev) => [...prev, newSource]);
-    // Cập nhật trạng thái project trong state
+    setSources((prev) => {
+      const updated = [...prev, newSource];
+      saveSourcesLocal(projectId, updated);
+      return updated;
+    });
+
     if (project) {
-      setProject({ ...project, status: "SOURCE_UPLOADED" });
+      const updatedProject: Project = { ...project, status: "SOURCE_UPLOADED" };
+      setProject(updatedProject);
+      saveProjectLocal(updatedProject);
     }
   };
 
   const handleDeleteSuccess = (sourceId: string) => {
     setSources((prev) => {
       const remaining = prev.filter((s) => s.id !== sourceId);
+      saveSourcesLocal(projectId, remaining);
       if (remaining.length === 0 && project) {
-        setProject({ ...project, status: "NEW" });
+        const updatedProject: Project = { ...project, status: "NEW" };
+        setProject(updatedProject);
+        saveProjectLocal(updatedProject);
       }
       return remaining;
     });
@@ -168,6 +204,7 @@ export default function ProjectWorkspacePage() {
               {/* Upload Zone */}
               <UploadZone
                 projectId={project.id}
+                project={project}
                 sources={sources}
                 onUploadSuccess={handleUploadSuccess}
                 onDeleteSuccess={handleDeleteSuccess}

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import { getProjectRepository } from "@/server/repositories";
-import { SourceFile, ApiResponse } from "@/types";
+import { Project, TaskType, SourceFile, ApiResponse } from "@/types";
 
 const ALLOWED_MIME_TYPES = [
   "application/pdf",
@@ -45,16 +45,39 @@ export async function POST(
     const { id: projectId } = await params;
     const repo = getProjectRepository();
 
-    const project = await repo.getProjectById(projectId);
-    if (!project) {
-      return NextResponse.json(
-        { ok: false, error: { code: "PROJECT_NOT_FOUND", message: "Không tìm thấy dự án." } },
-        { status: 404 }
-      );
-    }
-
     const formData = await req.formData();
     const file = formData.get("file") as File | null;
+    const projectMeta = formData.get("project") as string | null;
+    const projectTitle = formData.get("projectTitle") as string | null;
+    const taskType = formData.get("taskType") as string | null;
+    const subject = formData.get("subject") as string | null;
+    const targetGrade = formData.get("targetGrade") as string | null;
+
+    let project = await repo.getProjectById(projectId);
+    if (!project) {
+      // Tự động khôi phục dự án trên container Serverless Vercel
+      if (projectMeta) {
+        try {
+          const parsed = JSON.parse(projectMeta) as Project;
+          project = await repo.upsertProject({ ...parsed, id: projectId });
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!project) {
+        project = await repo.upsertProject({
+          id: projectId,
+          title: projectTitle || "Dự án bài học",
+          taskType: taskType === "CAMPAIGN" ? "CAMPAIGN" : "LESSON",
+          status: "NEW",
+          subject: subject || undefined,
+          targetGrade: targetGrade || undefined,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+    }
 
     if (!file) {
       return NextResponse.json(

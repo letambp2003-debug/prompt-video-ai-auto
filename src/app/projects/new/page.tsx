@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen, ShieldCheck, ArrowLeft, ArrowRight, Loader2, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { TaskType } from "@/types";
+import { saveProjectLocal } from "@/utils/projectStorage";
 
 function NewProjectForm() {
   const router = useRouter();
@@ -67,6 +68,9 @@ function NewProjectForm() {
       if (!res.ok || !json.ok) {
         throw new Error(json.error?.message || "Không thể khởi tạo dự án.");
       }
+
+      // Lưu trữ ngay lập tức vào localStorage để chống mất dữ liệu khi chuyển trang
+      saveProjectLocal(json.data);
 
       // Điều hướng trực tiếp vào không gian làm việc của dự án
       router.push(`/projects/${json.data.id}`);

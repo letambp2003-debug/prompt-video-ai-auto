@@ -3,6 +3,7 @@ import { Project, SourceFile, DataPack, Concept, Script, Storyboard, Scene, Gene
 export interface IProjectRepository {
   // Project
   createProject(project: Omit<Project, "id" | "createdAt" | "updatedAt">): Promise<Project>;
+  upsertProject(project: Project): Promise<Project>;
   getProjectById(id: string): Promise<Project | null>;
   listProjects(): Promise<Project[]>;
   updateProject(id: string, updates: Partial<Project>): Promise<Project>;

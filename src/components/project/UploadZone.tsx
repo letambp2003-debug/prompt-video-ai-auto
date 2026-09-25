@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef } from "react";
-import { SourceFile } from "@/types";
+import { Project, SourceFile } from "@/types";
 import {
   UploadCloud,
   FileText,
@@ -15,6 +15,7 @@ import {
 
 interface UploadZoneProps {
   projectId: string;
+  project?: Project | null;
   sources: SourceFile[];
   onUploadSuccess: (newSource: SourceFile) => void;
   onDeleteSuccess: (sourceId: string) => void;
@@ -95,6 +96,7 @@ async function optimizeImageForUpload(file: File): Promise<File> {
 
 export const UploadZone: React.FC<UploadZoneProps> = ({
   projectId,
+  project,
   sources,
   onUploadSuccess,
   onDeleteSuccess,
@@ -150,6 +152,16 @@ export const UploadZone: React.FC<UploadZoneProps> = ({
     setUploadStatusText(`Đang tải lên "${filename}"...`);
     const formData = new FormData();
     formData.append("file", fileToUpload);
+    formData.append("projectId", projectId);
+
+    // Kèm theo thông tin dự án để máy chủ tự động phục hồi nếu container bị khởi động lại
+    if (project) {
+      formData.append("project", JSON.stringify(project));
+      formData.append("projectTitle", project.title);
+      formData.append("taskType", project.taskType);
+      if (project.subject) formData.append("subject", project.subject);
+      if (project.targetGrade) formData.append("targetGrade", project.targetGrade);
+    }
 
     const res = await fetch(`/api/projects/${projectId}/sources`, {
       method: "POST",

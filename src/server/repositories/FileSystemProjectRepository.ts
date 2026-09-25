@@ -38,22 +38,87 @@ export function getProjectUploadDir(projectId: string, customBaseDir?: string): 
   return path.join(base, projectId, "files");
 }
 
+interface RepoCache {
+  projects: Map<string, Project>;
+  sources: Map<string, SourceFile[]>;
+  dataPacks: Map<string, DataPack>;
+  concepts: Map<string, Concept[]>;
+  scripts: Map<string, Script>;
+  storyboards: Map<string, Storyboard>;
+  jobs: Map<string, GenerationJob>;
+  assets: Map<string, Asset[]>;
+  safety: Map<string, SafetyReport>;
+  qc: Map<string, QCReport>;
+}
+
+function getGlobalCache(): RepoCache {
+  const g = globalThis as unknown as { __edu_repo_cache?: RepoCache };
+  if (!g.__edu_repo_cache) {
+    g.__edu_repo_cache = {
+      projects: new Map(),
+      sources: new Map(),
+      dataPacks: new Map(),
+      concepts: new Map(),
+      scripts: new Map(),
+      storyboards: new Map(),
+      jobs: new Map(),
+      assets: new Map(),
+      safety: new Map(),
+      qc: new Map(),
+    };
+  }
+  return g.__edu_repo_cache;
+}
+
 export class FileSystemProjectRepository implements IProjectRepository {
   private baseDir: string;
+  private isCustomDir: boolean;
 
-  // In-memory cache đảm bảo không bao giờ lỗi ENOENT kể cả trên Serverless read-only
-  private memoryProjects = new Map<string, Project>();
-  private memorySources = new Map<string, SourceFile[]>();
-  private memoryDataPacks = new Map<string, DataPack>();
-  private memoryConcepts = new Map<string, Concept[]>();
-  private memoryScripts = new Map<string, Script>();
-  private memoryStoryboards = new Map<string, Storyboard>();
-  private memoryJobs = new Map<string, GenerationJob>();
-  private memoryAssets = new Map<string, Asset[]>();
-  private memorySafety = new Map<string, SafetyReport>();
-  private memoryQC = new Map<string, QCReport>();
+  // Local instance cache (dùng khi chạy test với customBaseDir riêng biệt)
+  private localProjects = new Map<string, Project>();
+  private localSources = new Map<string, SourceFile[]>();
+  private localDataPacks = new Map<string, DataPack>();
+  private localConcepts = new Map<string, Concept[]>();
+  private localScripts = new Map<string, Script>();
+  private localStoryboards = new Map<string, Storyboard>();
+  private localJobs = new Map<string, GenerationJob>();
+  private localAssets = new Map<string, Asset[]>();
+  private localSafety = new Map<string, SafetyReport>();
+  private localQC = new Map<string, QCReport>();
+
+  private get memoryProjects(): Map<string, Project> {
+    return this.isCustomDir ? this.localProjects : getGlobalCache().projects;
+  }
+  private get memorySources(): Map<string, SourceFile[]> {
+    return this.isCustomDir ? this.localSources : getGlobalCache().sources;
+  }
+  private get memoryDataPacks(): Map<string, DataPack> {
+    return this.isCustomDir ? this.localDataPacks : getGlobalCache().dataPacks;
+  }
+  private get memoryConcepts(): Map<string, Concept[]> {
+    return this.isCustomDir ? this.localConcepts : getGlobalCache().concepts;
+  }
+  private get memoryScripts(): Map<string, Script> {
+    return this.isCustomDir ? this.localScripts : getGlobalCache().scripts;
+  }
+  private get memoryStoryboards(): Map<string, Storyboard> {
+    return this.isCustomDir ? this.localStoryboards : getGlobalCache().storyboards;
+  }
+  private get memoryJobs(): Map<string, GenerationJob> {
+    return this.isCustomDir ? this.localJobs : getGlobalCache().jobs;
+  }
+  private get memoryAssets(): Map<string, Asset[]> {
+    return this.isCustomDir ? this.localAssets : getGlobalCache().assets;
+  }
+  private get memorySafety(): Map<string, SafetyReport> {
+    return this.isCustomDir ? this.localSafety : getGlobalCache().safety;
+  }
+  private get memoryQC(): Map<string, QCReport> {
+    return this.isCustomDir ? this.localQC : getGlobalCache().qc;
+  }
 
   constructor(customBaseDir?: string) {
+    this.isCustomDir = Boolean(customBaseDir);
     this.baseDir = resolveBaseDir(customBaseDir);
   }
 
@@ -108,8 +173,8 @@ export class FileSystemProjectRepository implements IProjectRepository {
   // 1. PROJECT
   // ==========================================
 
-  async createProject(projectData: Omit<Project, "id" | "createdAt" | "updatedAt">): Promise<Project> {
-    const id = `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  async createProject(projectData: Omit<Project, "id" | "createdAt" | "updatedAt"> & { id?: string }): Promise<Project> {
+    const id = projectData.id || `proj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
     const project: Project = {
       ...projectData,
@@ -125,6 +190,20 @@ export class FileSystemProjectRepository implements IProjectRepository {
     const projectDir = this.getProjectDir(id);
     await this.writeJsonFile(path.join(projectDir, "project.json"), project);
     return project;
+  }
+
+  async upsertProject(project: Project): Promise<Project> {
+    const existing = await this.getProjectById(project.id);
+    const updated: Project = {
+      ...project,
+      createdAt: existing?.createdAt || project.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    this.memoryProjects.set(updated.id, updated);
+    const projectDir = this.getProjectDir(updated.id);
+    await this.writeJsonFile(path.join(projectDir, "project.json"), updated);
+    return updated;
   }
 
   async getProjectById(id: string): Promise<Project | null> {

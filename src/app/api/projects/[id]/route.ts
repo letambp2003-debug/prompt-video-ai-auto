@@ -38,6 +38,25 @@ export async function GET(
   }
 }
 
+export async function PUT(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+): Promise<NextResponse<ApiResponse<Project>>> {
+  try {
+    const { id } = await params;
+    const body = await req.json();
+    const repo = getProjectRepository();
+    const project = await repo.upsertProject({ ...body, id });
+    return NextResponse.json({ ok: true, data: project });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Lỗi khi lưu dự án";
+    return NextResponse.json(
+      { ok: false, error: { code: "PUT_PROJECT_FAILED", message } },
+      { status: 500 }
+    );
+  }
+}
+
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }

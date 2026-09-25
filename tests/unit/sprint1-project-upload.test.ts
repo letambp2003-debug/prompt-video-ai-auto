@@ -200,4 +200,26 @@ describe("Sprint 1 - Project Management & Input/Upload Tests", () => {
     current = await repo.getProjectById(project.id);
     expect(current?.status).toBe("NEW");
   });
+
+  it("upsertProject lưu trữ và khôi phục dự án đúng ID ngay cả khi container serverless khởi động lại", async () => {
+    const fixedId = "proj_serverless_recovery_test_999";
+    const upserted = await repo.upsertProject({
+      id: fixedId,
+      title: "Bài 10: Năng lượng tái tạo",
+      taskType: "LESSON",
+      status: "NEW",
+      subject: "Vật lý",
+      targetGrade: "Lớp 10",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(upserted.id).toBe(fixedId);
+    expect(upserted.title).toBe("Bài 10: Năng lượng tái tạo");
+
+    const retrieved = await repo.getProjectById(fixedId);
+    expect(retrieved).not.toBeNull();
+    expect(retrieved?.id).toBe(fixedId);
+    expect(retrieved?.subject).toBe("Vật lý");
+  });
 });

@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { FolderKanban, PlusCircle, Search, Clock, ArrowRight, Loader2 } from "lucide-react";
 import { Project } from "@/types";
+import { getProjectsLocal, saveProjectLocal, syncProjectToServer } from "@/utils/projectStorage";
 
 export default function ProjectsListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -11,15 +12,44 @@ export default function ProjectsListPage() {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    // 1. Nạp ngay từ localStorage để hiển thị tức thì, không bị trống trang
+    const localList = getProjectsLocal();
+    if (localList.length > 0) {
+      setProjects(localList);
+      setIsLoading(false);
+    }
+
     async function fetchProjects() {
       try {
         const res = await fetch("/api/projects");
         const json = await res.json();
-        if (json.ok) {
-          setProjects(json.data || []);
+        const serverList: Project[] = json.ok && Array.isArray(json.data) ? json.data : [];
+
+        // Hợp nhất danh sách server và client theo id
+        const mergedMap = new Map<string, Project>();
+        for (const p of localList) {
+          mergedMap.set(p.id, p);
+        }
+        for (const p of serverList) {
+          mergedMap.set(p.id, p);
+          saveProjectLocal(p); // Lưu bản mới nhất từ server vào local
+        }
+
+        const merged = Array.from(mergedMap.values()).sort(
+          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+
+        setProjects(merged);
+
+        // Tự động đồng bộ các dự án local lên server nếu server chưa có
+        const serverIds = new Set(serverList.map((s) => s.id));
+        for (const p of localList) {
+          if (!serverIds.has(p.id)) {
+            syncProjectToServer(p).catch(() => {});
+          }
         }
       } catch {
-        // Fallback
+        // Nếu server lỗi, vẫn giữ nguyên danh sách từ localStorage
       } finally {
         setIsLoading(false);
       }
