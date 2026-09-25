@@ -93,8 +93,9 @@ export async function POST(
       );
     }
 
-    // 3. Chuẩn bị thư mục lưu trữ cục bộ
-    const uploadDir = path.join(process.cwd(), "data", "projects", projectId, "files");
+    // 3. Chuẩn bị thư mục lưu trữ cục bộ (tự động điều chỉnh trên Serverless/Vercel)
+    const { getProjectUploadDir } = await import("@/server/repositories/FileSystemProjectRepository");
+    const uploadDir = getProjectUploadDir(projectId);
     await fs.mkdir(uploadDir, { recursive: true });
 
     // Tạo tên tệp an toàn tránh trùng lặp
