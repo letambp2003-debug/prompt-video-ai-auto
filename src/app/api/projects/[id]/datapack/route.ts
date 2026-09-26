@@ -33,17 +33,13 @@ export async function PUT(
     const repo = getProjectRepository();
 
     const existing = await repo.getDataPackByProjectId(projectId);
-    if (!existing) {
-      return NextResponse.json(
-        { ok: false, error: { code: "DATAPACK_NOT_FOUND", message: "DATA PACK chưa tồn tại để cập nhật." } },
-        { status: 404 }
-      );
-    }
-
     const updatedDataPack: DataPack = {
-      ...existing,
-      ...body,
+      id: existing?.id || body.id || `dp_${projectId}_v1`,
       projectId,
+      version: existing?.version || body.version || 1,
+      status: existing?.status || body.status || "DRAFT",
+      payload: body.payload || body,
+      createdAt: existing?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 

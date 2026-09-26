@@ -121,6 +121,11 @@ export default function ProjectWorkspacePage() {
     try {
       const res = await fetch(`/api/projects/${projectId}/analyze`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          sources,
+        }),
       });
       const json = await res.json();
 
@@ -145,6 +150,11 @@ export default function ProjectWorkspacePage() {
     try {
       const res = await fetch(`/api/projects/${projectId}/datapack/approve`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          dataPack,
+        }),
       });
       const json = await res.json();
       if (!res.ok || !json.ok) {

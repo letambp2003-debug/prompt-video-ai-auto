@@ -1,27 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProjectRepository } from "@/server/repositories";
 import { SourceAnalyzerAgent } from "@/ai/agents/SourceAnalyzerAgent";
-import { ApiResponse, Project, DataPack } from "@/types";
+import { ApiResponse, Project, SourceFile, DataPack } from "@/types";
 
 export const maxDuration = 60;
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse<ApiResponse<{ project: Project; dataPack: DataPack }>>> {
   try {
     const { id: projectId } = await params;
     const repo = getProjectRepository();
 
-    const project = await repo.getProjectById(projectId);
-    if (!project) {
-      return NextResponse.json(
-        { ok: false, error: { code: "PROJECT_NOT_FOUND", message: "Không tìm thấy dự án để phân tích." } },
-        { status: 404 }
-      );
+    // 1. Đọc dữ liệu gửi kèm từ Client để phòng ngừa serverless container bị cold restart
+    let body: { project?: Project; sources?: SourceFile[] } = {};
+    try {
+      body = await req.json();
+    } catch {
+      // Body rỗng nếu client gửi không kèm payload
     }
 
-    const sources = await repo.getSourceFilesByProjectId(projectId);
+    // 2. Tìm hoặc tự động phục hồi dự án trên container này
+    let project = await repo.getProjectById(projectId);
+    if (!project && body.project) {
+      project = await repo.upsertProject({ ...body.project, id: projectId });
+    }
+    if (!project) {
+      project = await repo.upsertProject({
+        id: projectId,
+        title: "Dự án bài học",
+        taskType: "LESSON",
+        status: "SOURCE_UPLOADED",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    // 3. Tìm hoặc phục hồi danh sách tài liệu
+    let sources = await repo.getSourceFilesByProjectId(projectId);
+    if (sources.length === 0 && Array.isArray(body.sources) && body.sources.length > 0) {
+      for (const s of body.sources) {
+        await repo.addSourceFile(s);
+      }
+      sources = await repo.getSourceFilesByProjectId(projectId);
+    }
+
     if (sources.length === 0) {
       return NextResponse.json(
         { ok: false, error: { code: "NO_SOURCES", message: "Vui lòng tải lên ít nhất 1 tài liệu bài học trước khi phân tích." } },
@@ -29,7 +53,7 @@ export async function POST(
       );
     }
 
-    // 1. Cập nhật trạng thái sang ANALYZING_SOURCE
+    // 4. Cập nhật trạng thái sang ANALYZING_SOURCE
     await repo.updateProject(projectId, { status: "ANALYZING_SOURCE" });
 
     // 2. Chạy SourceAnalyzerAgent
