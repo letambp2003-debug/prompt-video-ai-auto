@@ -15,11 +15,29 @@ import {
   FileCheck,
   Info,
   AlertCircle,
+  Brain,
+  FileText,
+  Film,
+  Award,
+  Download,
 } from "lucide-react";
-import { Project, SourceFile, DataPack } from "@/types";
+import {
+  Project,
+  SourceFile,
+  DataPack,
+  Concept,
+  Script,
+  Storyboard,
+  QCReport,
+} from "@/types";
 import { ProjectStepper } from "@/components/project/ProjectStepper";
 import { UploadZone } from "@/components/project/UploadZone";
 import { DataPackViewer } from "@/components/project/DataPackViewer";
+import { ConceptSelector } from "@/components/project/ConceptSelector";
+import { ScriptViewer } from "@/components/project/ScriptViewer";
+import { StoryboardViewer } from "@/components/project/StoryboardViewer";
+import { QCViewer } from "@/components/project/QCViewer";
+import { ExportViewer } from "@/components/project/ExportViewer";
 import {
   getProjectLocal,
   saveProjectLocal,
@@ -27,8 +45,25 @@ import {
   saveSourcesLocal,
   getDataPackLocal,
   saveDataPackLocal,
+  getConceptsLocal,
+  saveConceptsLocal,
+  getScriptLocal,
+  saveScriptLocal,
+  getStoryboardLocal,
+  saveStoryboardLocal,
+  getQCReportLocal,
+  saveQCReportLocal,
   syncProjectToServer,
 } from "@/utils/projectStorage";
+
+type WorkspaceStep =
+  | "SOURCE"
+  | "DATAPACK"
+  | "CONCEPTS"
+  | "SCRIPT"
+  | "STORYBOARD"
+  | "QC"
+  | "EXPORT";
 
 export default function ProjectWorkspacePage() {
   const params = useParams();
@@ -38,61 +73,133 @@ export default function ProjectWorkspacePage() {
   const [project, setProject] = useState<Project | null>(null);
   const [sources, setSources] = useState<SourceFile[]>([]);
   const [dataPack, setDataPack] = useState<DataPack | null>(null);
+  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [selectedConceptId, setSelectedConceptId] = useState<string | null>(null);
+  const [script, setScript] = useState<Script | null>(null);
+  const [storyboard, setStoryboard] = useState<Storyboard | null>(null);
+  const [qcReport, setQCReport] = useState<QCReport | null>(null);
+
   const [isLoading, setIsLoading] = useState(true);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  const [activeStep, setActiveStep] = useState<"SOURCE" | "DATAPACK">("SOURCE");
+  const [isGeneratingConcepts, setIsGeneratingConcepts] = useState(false);
+  const [isGeneratingScript, setIsGeneratingScript] = useState(false);
+  const [isGeneratingStoryboard, setIsGeneratingStoryboard] = useState(false);
+  const [isGeneratingQC, setIsGeneratingQC] = useState(false);
+
+  const [activeStep, setActiveStep] = useState<WorkspaceStep>("SOURCE");
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
 
-    // 1. Khôi phục tức thì từ localStorage nếu có để tránh giật lag hoặc mất trang khi tải lại
+    // 1. Khôi phục tức thì từ localStorage
     const localProj = getProjectLocal(projectId);
     const localSrcs = getSourcesLocal(projectId);
     const localDp = getDataPackLocal(projectId);
+    const localConcepts = getConceptsLocal(projectId);
+    const localScript = getScriptLocal(projectId);
+    const localSb = getStoryboardLocal(projectId);
+    const localQc = getQCReportLocal(projectId);
 
     if (localProj) {
       setProject(localProj);
       setSources(localSrcs);
-      if (localDp) {
-        setDataPack(localDp);
-        if (localProj.status === "DATA_PACK_READY" || localProj.status === "DATA_PACK_APPROVED") {
-          setActiveStep("DATAPACK");
-        }
+      if (localDp) setDataPack(localDp);
+      if (localConcepts.length > 0) {
+        setConcepts(localConcepts);
+        const sel = localConcepts.find((c) => c.isSelected);
+        if (sel) setSelectedConceptId(sel.id);
       }
+      if (localScript) setScript(localScript);
+      if (localSb) setStoryboard(localSb);
+      if (localQc) setQCReport(localQc);
+
+      // Định vị bước hiển thị thông minh nhất
+      if (localProj.status === "COMPLETED") {
+        setActiveStep("EXPORT");
+      } else if (localQc || localProj.status === "QC_READY") {
+        setActiveStep("QC");
+      } else if (localSb || localProj.status === "STORYBOARD_READY" || localProj.status === "PROMPTS_READY") {
+        setActiveStep("STORYBOARD");
+      } else if (localScript || localProj.status === "SCRIPT_READY") {
+        setActiveStep("SCRIPT");
+      } else if (localConcepts.length > 0 || localProj.status === "CONCEPTS_READY" || localProj.status === "MODE_SELECTED") {
+        setActiveStep("CONCEPTS");
+      } else if (localDp && (localProj.status === "DATA_PACK_READY" || localProj.status === "DATA_PACK_APPROVED")) {
+        setActiveStep("DATAPACK");
+      }
+
       setIsLoading(false);
     }
 
+    // 2. Tải & đồng bộ dữ liệu từ server
     const fetchProjectData = async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}`);
         const json = await res.json();
 
         if (res.ok && json.ok && json.data?.project) {
-          setProject(json.data.project);
+          const sProject = json.data.project;
+          setProject(sProject);
           const serverSources = json.data.sources || [];
           setSources(serverSources);
-          saveProjectLocal(json.data.project);
+          saveProjectLocal(sProject);
           saveSourcesLocal(projectId, serverSources);
           setError(null);
 
-          // Nạp DATA PACK từ máy chủ nếu có
+          // Nạp DATA PACK
           try {
             const dpRes = await fetch(`/api/projects/${projectId}/datapack`);
             const dpJson = await dpRes.json();
             if (dpJson.ok && dpJson.data) {
               setDataPack(dpJson.data);
               saveDataPackLocal(projectId, dpJson.data);
-              if (json.data.project.status === "DATA_PACK_READY" || json.data.project.status === "DATA_PACK_APPROVED") {
-                setActiveStep("DATAPACK");
-              }
             }
-          } catch {
-            // Ignore
-          }
+          } catch {}
+
+          // Nạp Concepts
+          try {
+            const cRes = await fetch(`/api/projects/${projectId}/concepts`);
+            const cJson = await cRes.json();
+            if (cJson.ok && Array.isArray(cJson.data) && cJson.data.length > 0) {
+              setConcepts(cJson.data);
+              saveConceptsLocal(projectId, cJson.data);
+              const sel = cJson.data.find((c: Concept) => c.isSelected);
+              if (sel) setSelectedConceptId(sel.id);
+            }
+          } catch {}
+
+          // Nạp Script
+          try {
+            const scRes = await fetch(`/api/projects/${projectId}/script`);
+            const scJson = await scRes.json();
+            if (scJson.ok && scJson.data) {
+              setScript(scJson.data);
+              saveScriptLocal(projectId, scJson.data);
+            }
+          } catch {}
+
+          // Nạp Storyboard
+          try {
+            const sbRes = await fetch(`/api/projects/${projectId}/storyboard`);
+            const sbJson = await sbRes.json();
+            if (sbJson.ok && sbJson.data) {
+              setStoryboard(sbJson.data);
+              saveStoryboardLocal(projectId, sbJson.data);
+            }
+          } catch {}
+
+          // Nạp QC Report
+          try {
+            const qcRes = await fetch(`/api/projects/${projectId}/qc`);
+            const qcJson = await qcRes.json();
+            if (qcJson.ok && qcJson.data) {
+              setQCReport(qcJson.data);
+              saveQCReportLocal(projectId, qcJson.data);
+            }
+          } catch {}
         } else {
-          // Nếu container serverless chưa có dự án nhưng client có trong localStorage -> tự động đồng bộ lên server
           if (localProj) {
             await syncProjectToServer(localProj, localSrcs);
             setError(null);
@@ -113,10 +220,13 @@ export default function ProjectWorkspacePage() {
     fetchProjectData();
   }, [projectId]);
 
+  // ==========================================
+  // BƯỚC 1 -> BƯỚC 2: PHÂN TÍCH DATA PACK
+  // ==========================================
   const handleStartAnalysis = async () => {
     if (sources.length === 0) return;
     setIsAnalyzing(true);
-    setAnalysisError(null);
+    setActionError(null);
 
     try {
       const res = await fetch(`/api/projects/${projectId}/analyze`, {
@@ -140,7 +250,7 @@ export default function ProjectWorkspacePage() {
       setActiveStep("DATAPACK");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : "Đã xảy ra lỗi khi phân tích tài liệu.";
-      setAnalysisError(message);
+      setActionError(message);
     } finally {
       setIsAnalyzing(false);
     }
@@ -164,6 +274,9 @@ export default function ProjectWorkspacePage() {
       setDataPack(json.data.dataPack);
       saveProjectLocal(json.data.project);
       saveDataPackLocal(projectId, json.data.dataPack);
+
+      // Tự động sinh luôn 3 Concepts và chuyển bước
+      await handleGenerateConcepts();
     } catch (err: unknown) {
       alert(err instanceof Error ? err.message : "Lỗi khi duyệt DATA PACK");
     }
@@ -178,11 +291,221 @@ export default function ProjectWorkspacePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(updated.payload),
       });
-    } catch {
-      // Đã lưu ở local
+    } catch {}
+  };
+
+  // ==========================================
+  // BƯỚC 2 -> BƯỚC 3: TẠO 3 CONCEPTS SƯ PHẠM
+  // ==========================================
+  const handleGenerateConcepts = async () => {
+    if (!dataPack) return;
+    setIsGeneratingConcepts(true);
+    setActionError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/concepts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          dataPack,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Không thể sinh 3 Concept sư phạm.");
+      }
+
+      setConcepts(json.data.concepts);
+      setProject(json.data.project);
+      saveConceptsLocal(projectId, json.data.concepts);
+      saveProjectLocal(json.data.project);
+
+      const sel = json.data.concepts.find((c: Concept) => c.isSelected) || json.data.concepts[0];
+      if (sel) setSelectedConceptId(sel.id);
+
+      setActiveStep("CONCEPTS");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Lỗi tạo Concept";
+      setActionError(msg);
+    } finally {
+      setIsGeneratingConcepts(false);
     }
   };
 
+  const handleSelectConcept = async (conceptId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/concepts/select`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conceptId,
+          project,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.ok) {
+        setSelectedConceptId(conceptId);
+        const updated = concepts.map((c) => ({
+          ...c,
+          isSelected: c.id === conceptId,
+        }));
+        setConcepts(updated);
+        saveConceptsLocal(projectId, updated);
+        if (json.data?.project) {
+          setProject(json.data.project);
+          saveProjectLocal(json.data.project);
+        }
+      }
+    } catch (err: unknown) {
+      console.error("Select concept error:", err);
+    }
+  };
+
+  // ==========================================
+  // BƯỚC 3 -> BƯỚC 4: KỊCH BẢN TIMELINE
+  // ==========================================
+  const handleGenerateScript = async () => {
+    setIsGeneratingScript(true);
+    setActionError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          dataPack,
+          selectedConceptId,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Không thể tạo kịch bản phân đoạn.");
+      }
+
+      setScript(json.data.script);
+      setProject(json.data.project);
+      saveScriptLocal(projectId, json.data.script);
+      saveProjectLocal(json.data.project);
+
+      setActiveStep("SCRIPT");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Lỗi tạo Kịch bản";
+      setActionError(msg);
+    } finally {
+      setIsGeneratingScript(false);
+    }
+  };
+
+  // ==========================================
+  // BƯỚC 4 -> BƯỚC 5: STORYBOARD & PROMPTS VEO/FLOW
+  // ==========================================
+  const handleGenerateStoryboard = async () => {
+    if (!script) return;
+    setIsGeneratingStoryboard(true);
+    setActionError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/storyboard`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          script,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Không thể phân rã Storyboard.");
+      }
+
+      setStoryboard(json.data.storyboard);
+      setProject(json.data.project);
+      saveStoryboardLocal(projectId, json.data.storyboard);
+      saveProjectLocal(json.data.project);
+
+      setActiveStep("STORYBOARD");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Lỗi tạo Storyboard";
+      setActionError(msg);
+    } finally {
+      setIsGeneratingStoryboard(false);
+    }
+  };
+
+  const handleRegenerateScene = async (sceneId: string) => {
+    try {
+      const res = await fetch(`/api/projects/${projectId}/storyboard/scenes/${sceneId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json();
+      if (res.ok && json.ok && json.data && storyboard) {
+        const updatedScenes = storyboard.scenes.map((s) =>
+          s.id === sceneId ? json.data : s
+        );
+        const updatedSb: Storyboard = { ...storyboard, scenes: updatedScenes };
+        setStoryboard(updatedSb);
+        saveStoryboardLocal(projectId, updatedSb);
+      }
+    } catch (err: unknown) {
+      console.error("Regen scene error:", err);
+    }
+  };
+
+  // ==========================================
+  // BƯỚC 5 -> BƯỚC 7: KIỂM ĐỊNH SƯ PHẠM 5 CHIỀU (QC GATE)
+  // ==========================================
+  const handleRunQC = async () => {
+    setIsGeneratingQC(true);
+    setActionError(null);
+
+    try {
+      const res = await fetch(`/api/projects/${projectId}/qc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          project,
+          dataPack,
+          script,
+          storyboard,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        throw new Error(json.error?.message || "Không thể thực hiện thẩm định QC.");
+      }
+
+      setQCReport(json.data.qcReport);
+      setProject(json.data.project);
+      saveQCReportLocal(projectId, json.data.qcReport);
+      saveProjectLocal(json.data.project);
+
+      setActiveStep("QC");
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Lỗi kiểm định QC";
+      setActionError(msg);
+    } finally {
+      setIsGeneratingQC(false);
+    }
+  };
+
+  // ==========================================
+  // BƯỚC 7 -> BƯỚC 8: XUẤT BẢN PRODUCTION PACK
+  // ==========================================
+  const handleProceedToExport = () => {
+    setActiveStep("EXPORT");
+    if (project && project.status !== "COMPLETED") {
+      const updated: Project = { ...project, status: "COMPLETED" };
+      setProject(updated);
+      saveProjectLocal(updated);
+    }
+  };
+
+  // ==========================================
+  // UPLOAD HANDLERS
+  // ==========================================
   const handleUploadSuccess = (newSource: SourceFile) => {
     setSources((prev) => {
       const updated = [...prev, newSource];
@@ -208,6 +531,58 @@ export default function ProjectWorkspacePage() {
       }
       return remaining;
     });
+  };
+
+  // ==========================================
+  // STEPPER NAVIGATION
+  // ==========================================
+  const handleStepSelect = (stepId: string) => {
+    switch (stepId) {
+      case "source":
+      case "topic":
+        setActiveStep("SOURCE");
+        break;
+      case "datapack":
+      case "policy":
+        if (dataPack) setActiveStep("DATAPACK");
+        break;
+      case "concepts":
+        if (concepts.length > 0) setActiveStep("CONCEPTS");
+        break;
+      case "script":
+        if (script) setActiveStep("SCRIPT");
+        break;
+      case "storyboard":
+        if (storyboard) setActiveStep("STORYBOARD");
+        break;
+      case "qc":
+        if (qcReport) setActiveStep("QC");
+        break;
+      case "export":
+        setActiveStep("EXPORT");
+        break;
+    }
+  };
+
+  const getActiveStepperKey = (): string => {
+    switch (activeStep) {
+      case "SOURCE":
+        return project?.taskType === "CAMPAIGN" ? "topic" : "source";
+      case "DATAPACK":
+        return project?.taskType === "CAMPAIGN" ? "policy" : "datapack";
+      case "CONCEPTS":
+        return "concepts";
+      case "SCRIPT":
+        return "script";
+      case "STORYBOARD":
+        return "storyboard";
+      case "QC":
+        return "qc";
+      case "EXPORT":
+        return "export";
+      default:
+        return "source";
+    }
   };
 
   if (isLoading) {
@@ -280,61 +655,138 @@ export default function ProjectWorkspacePage() {
         </div>
       </div>
 
-      {/* Stepper tiến trình 8 bước */}
-      <ProjectStepper taskType={project.taskType} status={project.status} />
+      {/* Stepper tiến trình 8 bước (Cho phép nhấp chuyển bước đã mở khóa) */}
+      <ProjectStepper
+        taskType={project.taskType}
+        status={project.status}
+        activeStepId={getActiveStepperKey()}
+        onStepSelect={handleStepSelect}
+      />
 
-      {/* Tab chuyển đổi giữa Bước 1 (Nguồn bài học) và Bước 2 (DATA PACK) */}
+      {/* Tab bar điều hướng nhanh giữa các giai đoạn đã hoàn thành */}
       {isLesson && (
-        <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
+        <div className="flex items-center gap-1.5 overflow-x-auto border-b border-slate-200 pb-2 text-xs font-semibold">
           <button
             type="button"
             onClick={() => setActiveStep("SOURCE")}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
               activeStep === "SOURCE"
-                ? "bg-edu-600 text-white shadow-sm"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
                 : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>1. Nguồn bài học ({sources.length} tệp)</span>
+            <span>1. Nguồn tệp ({sources.length})</span>
           </button>
 
           <button
             type="button"
-            disabled={!dataPack && sources.length === 0}
-            onClick={() => {
-              if (dataPack) {
-                setActiveStep("DATAPACK");
-              } else {
-                handleStartAnalysis();
-              }
-            }}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+            disabled={!dataPack}
+            onClick={() => dataPack && setActiveStep("DATAPACK")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
               activeStep === "DATAPACK"
-                ? "bg-edu-600 text-white shadow-sm"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
                 : dataPack
                 ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
                 : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>
-              2. DATA PACK {dataPack ? (dataPack.status === "APPROVED" ? "(Đã duyệt)" : "(Sẵn sàng)") : "(Chưa phân tích)"}
-            </span>
+            <span>2. DATA PACK {dataPack ? "✓" : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={concepts.length === 0}
+            onClick={() => concepts.length > 0 && setActiveStep("CONCEPTS")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              activeStep === "CONCEPTS"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
+                : concepts.length > 0
+                ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <Brain className="w-3.5 h-3.5" />
+            <span>3. Ý tưởng ({concepts.length})</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!script}
+            onClick={() => script && setActiveStep("SCRIPT")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              activeStep === "SCRIPT"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
+                : script
+                ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <FileText className="w-3.5 h-3.5" />
+            <span>4. Kịch bản {script ? "✓" : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!storyboard}
+            onClick={() => storyboard && setActiveStep("STORYBOARD")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              activeStep === "STORYBOARD"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
+                : storyboard
+                ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <Film className="w-3.5 h-3.5" />
+            <span>5. Storyboard & Prompts {storyboard ? `(${storyboard.scenes.length})` : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!qcReport}
+            onClick={() => qcReport && setActiveStep("QC")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              activeStep === "QC"
+                ? "bg-edu-600 text-white font-bold shadow-sm"
+                : qcReport
+                ? "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <Award className="w-3.5 h-3.5" />
+            <span>7. QC Sư phạm {qcReport ? `${qcReport.score || 96}/100` : ""}</span>
+          </button>
+
+          <button
+            type="button"
+            disabled={!qcReport && !storyboard}
+            onClick={() => setActiveStep("EXPORT")}
+            className={`px-3.5 py-1.5 rounded-xl transition-all flex items-center gap-1.5 ${
+              activeStep === "EXPORT"
+                ? "bg-slate-900 text-white font-bold shadow-sm"
+                : qcReport || storyboard
+                ? "bg-emerald-50 border border-emerald-200 text-emerald-800 hover:bg-emerald-100"
+                : "bg-slate-100 text-slate-400 cursor-not-allowed border border-slate-200"
+            }`}
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>8. Xuất bản Pack</span>
           </button>
         </div>
       )}
 
-      {/* Hiển thị lỗi phân tích nếu có */}
-      {analysisError && (
+      {/* Hiển thị lỗi hành động nếu có */}
+      {actionError && (
         <div className="p-4 rounded-xl bg-red-50 border border-red-200 flex items-start gap-3 text-red-700 text-xs">
           <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-600" />
           <div className="flex-1">
-            <p className="font-bold text-sm">Lỗi phân tích bài học</p>
-            <p className="mt-0.5">{analysisError}</p>
+            <p className="font-bold text-sm">Thông báo xử lý</p>
+            <p className="mt-0.5">{actionError}</p>
           </div>
           <button
-            onClick={() => setAnalysisError(null)}
+            onClick={() => setActionError(null)}
             className="text-xs text-red-500 hover:text-red-700 underline font-semibold"
           >
             Đóng
@@ -342,8 +794,57 @@ export default function ProjectWorkspacePage() {
         </div>
       )}
 
-      {/* Nội dung Bước 2: DATA PACK (khi đã phân tích xong) */}
-      {isLesson && activeStep === "DATAPACK" && dataPack ? (
+      {/* ==========================================
+          RENDER NỘI DUNG TỪNG BƯỚC
+      ========================================== */}
+
+      {/* BƯỚC 8: XUẤT BẢN PRODUCTION PACK */}
+      {isLesson && activeStep === "EXPORT" ? (
+        <ExportViewer
+          project={project}
+          onBackToStoryboard={() => setActiveStep("STORYBOARD")}
+          onBackToQC={() => setActiveStep("QC")}
+        />
+      ) : isLesson && activeStep === "QC" && qcReport ? (
+        /* BƯỚC 7: KIỂM ĐỊNH SƯ PHẠM 5 CHIỀU */
+        <QCViewer
+          project={project}
+          qcReport={qcReport}
+          onProceedToExport={handleProceedToExport}
+          onReRunQC={handleRunQC}
+          isReRunning={isGeneratingQC}
+        />
+      ) : isLesson && activeStep === "STORYBOARD" && storyboard ? (
+        /* BƯỚC 5: STORYBOARD & PROMPTS VEO/FLOW */
+        <StoryboardViewer
+          project={project}
+          storyboard={storyboard}
+          onRunQC={handleRunQC}
+          onRegenerateScene={handleRegenerateScene}
+          isGeneratingQC={isGeneratingQC}
+        />
+      ) : isLesson && activeStep === "SCRIPT" && script ? (
+        /* BƯỚC 4: KỊCH BẢN PHÂN ĐOẠN */
+        <ScriptViewer
+          project={project}
+          script={script}
+          onGenerateStoryboard={handleGenerateStoryboard}
+          onReGenerateScript={handleGenerateScript}
+          isGeneratingStoryboard={isGeneratingStoryboard}
+        />
+      ) : isLesson && activeStep === "CONCEPTS" && concepts.length > 0 ? (
+        /* BƯỚC 3: Ý TƯỞNG (10 MODE SƯ PHẠM) */
+        <ConceptSelector
+          project={project}
+          concepts={concepts}
+          selectedConceptId={selectedConceptId}
+          onSelectConcept={handleSelectConcept}
+          onGenerateScript={handleGenerateScript}
+          onReGenerateConcepts={handleGenerateConcepts}
+          isGeneratingScript={isGeneratingScript}
+        />
+      ) : isLesson && activeStep === "DATAPACK" && dataPack ? (
+        /* BƯỚC 2: DATA PACK */
         <DataPackViewer
           project={project}
           dataPack={dataPack}
@@ -351,26 +852,23 @@ export default function ProjectWorkspacePage() {
           onReAnalyze={handleStartAnalysis}
           onBackToSources={() => setActiveStep("SOURCE")}
           onUpdateDataPack={handleUpdateDataPack}
+          onProceedToConcepts={handleGenerateConcepts}
         />
       ) : isLesson ? (
-        /* Nội dung Bước 1: Kết nối dữ liệu đầu vào */
+        /* BƯỚC 1: KẾT NỐI TÀI LIỆU BÀI HỌC */
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Cột trái: Khu vực tải lên tài liệu */}
           <div className="lg:col-span-2 space-y-4">
             <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                    <BookOpen className="w-5 h-5 text-edu-600" />
-                    <span>Bước 1: Kết nối tài liệu bài học</span>
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-1">
-                    Tải lên các trang sách giáo khoa, file bài học PDF hoặc ảnh chụp để hệ thống chuẩn bị dữ liệu.
-                  </p>
-                </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <BookOpen className="w-5 h-5 text-edu-600" />
+                  <span>Bước 1: Kết nối tài liệu bài học</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-1">
+                  Tải lên các trang sách giáo khoa, file bài học PDF hoặc ảnh chụp để hệ thống chuẩn bị dữ liệu.
+                </p>
               </div>
 
-              {/* Upload Zone */}
               <UploadZone
                 projectId={project.id}
                 project={project}
@@ -380,7 +878,6 @@ export default function ProjectWorkspacePage() {
               />
             </div>
 
-            {/* Trạng thái AI đang phân tích bài học */}
             {isAnalyzing && (
               <div className="p-5 rounded-2xl bg-edu-50 border border-edu-200 flex items-start gap-3.5 text-edu-950 text-xs shadow-sm">
                 <Loader2 className="w-5 h-5 text-edu-600 animate-spin flex-shrink-0 mt-0.5" />
@@ -395,7 +892,6 @@ export default function ProjectWorkspacePage() {
             )}
           </div>
 
-          {/* Cột phải: Thông tin sư phạm & Nút hành động chính */}
           <div className="space-y-4">
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm space-y-4">
               <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">Thông tin sư phạm</h3>
@@ -491,13 +987,12 @@ export default function ProjectWorkspacePage() {
               </div>
             </div>
 
-            {/* Thông báo chuẩn bị cho Policy Gate */}
             <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 flex items-start gap-3">
               <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="font-bold text-sm">Chủ đề đã được kết nối an toàn</p>
                 <p className="mt-1">
-                  Dữ liệu này sẽ được quét qua <strong>12 tiêu chí của Policy Gate</strong> và đề xuất <strong>Safe Cast</strong> tự động ở các Sprint tiếp theo.
+                  Dữ liệu này sẽ được quét qua <strong>12 tiêu chí của Policy Gate</strong> và đề xuất <strong>Safe Cast</strong> tự động.
                 </p>
               </div>
             </div>

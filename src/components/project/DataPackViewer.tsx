@@ -30,6 +30,7 @@ interface DataPackViewerProps {
   onReAnalyze: () => void;
   onBackToSources: () => void;
   onUpdateDataPack: (updated: DataPack) => Promise<void>;
+  onProceedToConcepts?: () => void;
 }
 
 export const DataPackViewer: React.FC<DataPackViewerProps> = ({
@@ -39,6 +40,7 @@ export const DataPackViewer: React.FC<DataPackViewerProps> = ({
   onReAnalyze,
   onBackToSources,
   onUpdateDataPack,
+  onProceedToConcepts,
 }) => {
   const [activeTab, setActiveTab] = useState<"ALL" | "YCCD" | "KT" | "SAI" | "TT" | "HK" | "HINH">("ALL");
   const [isApproving, setIsApproving] = useState(false);
@@ -181,9 +183,22 @@ export const DataPackViewer: React.FC<DataPackViewerProps> = ({
               )}
             </button>
           ) : (
-            <div className="px-4 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
-              <Check className="w-4 h-4 text-emerald-600" />
-              <span>Đã sẵn sàng tạo Concept (Sprint 3)</span>
+            <div className="flex items-center gap-2">
+              <div className="px-3.5 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center gap-1.5">
+                <Check className="w-4 h-4 text-emerald-600" />
+                <span>Đã duyệt & Khóa</span>
+              </div>
+              {onProceedToConcepts && (
+                <button
+                  type="button"
+                  onClick={onProceedToConcepts}
+                  className="px-5 py-2.5 rounded-xl bg-edu-600 hover:bg-edu-700 text-white font-bold text-xs shadow-sm transition-all flex items-center gap-2 cursor-pointer ring-4 ring-edu-100"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>TIẾP TỤC: TẠO 3 CONCEPT (BƯỚC 3)</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              )}
             </div>
           )}
         </div>

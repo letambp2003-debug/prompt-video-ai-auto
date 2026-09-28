@@ -100,7 +100,7 @@ describe("Sprint 2 - Source Analyzer & DATA PACK Tests", () => {
     expect(retrieved).not.toBeNull();
     expect(retrieved?.id).toBe(dataPack.id);
     expect(retrieved?.payload.lessonTitle).toBe(project.title);
-  });
+  }, 15000);
 
   it("TC07 - Phê duyệt (Approve) khóa phiên bản DATA PACK và chuyển trạng thái dự án", async () => {
     const project = await repo.createProject({

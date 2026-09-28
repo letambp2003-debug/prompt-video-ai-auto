@@ -1,8 +1,12 @@
-import { Project, SourceFile, DataPack } from "@/types";
+import { Project, SourceFile, DataPack, Concept, Script, Storyboard, QCReport } from "@/types";
 
 const STORAGE_KEY_PROJECTS = "edu_projects_store_v1";
 const STORAGE_PREFIX_SOURCES = "edu_sources_store_v1_";
 const STORAGE_PREFIX_DATAPACK = "edu_datapack_store_v1_";
+const STORAGE_PREFIX_CONCEPTS = "edu_concepts_store_v1_";
+const STORAGE_PREFIX_SCRIPT = "edu_script_store_v1_";
+const STORAGE_PREFIX_STORYBOARD = "edu_storyboard_store_v1_";
+const STORAGE_PREFIX_QC = "edu_qc_store_v1_";
 
 /**
  * Lấy danh sách dự án đã lưu trong localStorage của trình duyệt
@@ -127,6 +131,111 @@ export function getDataPackLocal(projectId: string): DataPack | null {
     const raw = localStorage.getItem(`${STORAGE_PREFIX_DATAPACK}${projectId}`);
     if (!raw) return null;
     return JSON.parse(raw) as DataPack;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lưu Concepts vào localStorage
+ */
+export function saveConceptsLocal(projectId: string, concepts: Concept[]): void {
+  if (typeof window === "undefined" || !projectId) return;
+  try {
+    localStorage.setItem(`${STORAGE_PREFIX_CONCEPTS}${projectId}`, JSON.stringify(concepts));
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Lấy Concepts từ localStorage
+ */
+export function getConceptsLocal(projectId: string): Concept[] {
+  if (typeof window === "undefined" || !projectId) return [];
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX_CONCEPTS}${projectId}`);
+    if (!raw) return [];
+    const list = JSON.parse(raw) as Concept[];
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Lưu Script vào localStorage
+ */
+export function saveScriptLocal(projectId: string, script: Script): void {
+  if (typeof window === "undefined" || !projectId) return;
+  try {
+    localStorage.setItem(`${STORAGE_PREFIX_SCRIPT}${projectId}`, JSON.stringify(script));
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Lấy Script từ localStorage
+ */
+export function getScriptLocal(projectId: string): Script | null {
+  if (typeof window === "undefined" || !projectId) return null;
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX_SCRIPT}${projectId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as Script;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lưu Storyboard vào localStorage
+ */
+export function saveStoryboardLocal(projectId: string, storyboard: Storyboard): void {
+  if (typeof window === "undefined" || !projectId) return;
+  try {
+    localStorage.setItem(`${STORAGE_PREFIX_STORYBOARD}${projectId}`, JSON.stringify(storyboard));
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Lấy Storyboard từ localStorage
+ */
+export function getStoryboardLocal(projectId: string): Storyboard | null {
+  if (typeof window === "undefined" || !projectId) return null;
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX_STORYBOARD}${projectId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as Storyboard;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Lưu QCReport vào localStorage
+ */
+export function saveQCReportLocal(projectId: string, qc: QCReport): void {
+  if (typeof window === "undefined" || !projectId) return;
+  try {
+    localStorage.setItem(`${STORAGE_PREFIX_QC}${projectId}`, JSON.stringify(qc));
+  } catch {
+    // Ignore
+  }
+}
+
+/**
+ * Lấy QCReport từ localStorage
+ */
+export function getQCReportLocal(projectId: string): QCReport | null {
+  if (typeof window === "undefined" || !projectId) return null;
+  try {
+    const raw = localStorage.getItem(`${STORAGE_PREFIX_QC}${projectId}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as QCReport;
   } catch {
     return null;
   }

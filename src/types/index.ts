@@ -248,16 +248,17 @@ export interface CharacterMasterLock {
   face: string;
   hair: string;
   body: string;
-  clothing: string;
-  accessories: string;
-  personality: string;
-  voice: string;
-  forbiddenChanges: string[];
+  clothing?: string;
+  accessories?: string;
+  personality?: string;
+  voice?: string;
+  forbiddenChanges?: string[];
 }
 
 export interface LocationMasterLock {
   id: string;
   place: string;
+  environment?: string;
   time: string;
   weather: string;
   architecture: string;
@@ -271,6 +272,7 @@ export interface LocationMasterLock {
 export interface VisualStyleLock {
   id: string;
   styleName: string;
+  renderStyle?: string;
   description: string;
   lightingMood: string;
   colorGrading: string;
@@ -308,14 +310,17 @@ export interface Scene {
   durationSeconds: number;
   purpose: string;
   visual: string;
+  visualSummary?: string;
   action: string;
   camera: string;
+  cameraMove?: string;
   dialogue: string;
   voice: string;
   sfx: string;
   transition: string;
   imagePrompt: string;
   videoPrompt: string;
+  promptFlowVeo?: string;
   status: SceneStatus;
   version: number;
   selectedAssetId?: string | null;
@@ -444,11 +449,29 @@ export interface QCCheckItem {
   suggestedFix?: string;
 }
 
+export interface QCDimensionScore {
+  score: number;
+  status: "PASSED" | "WARNING" | "FAILED";
+  notes: string;
+}
+
+export interface QCDimensions {
+  sourceFidelity: QCDimensionScore;
+  pedagogicalSoundness: QCDimensionScore;
+  continuityMasterLock: QCDimensionScore;
+  videoFeasibility: QCDimensionScore;
+  schoolSafety: QCDimensionScore;
+}
+
 export interface QCReport {
   id: string;
   projectId: string;
   version: number;
   overallStatus: "PASS" | "NEED_FIX";
+  score?: number;
+  passed?: boolean;
+  dimensions?: QCDimensions;
+  suggestions?: string[];
   checks: QCCheckItem[];
   createdAt: string;
 }
