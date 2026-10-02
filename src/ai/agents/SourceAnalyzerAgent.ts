@@ -1,5 +1,7 @@
+import fs from "fs/promises";
+import path from "path";
 import { z } from "zod";
-import { Project, SourceFile, DataPack, DataPackPayload, PedagogicalMode } from "@/types";
+import { Project, SourceFile, DataPack, DataPackPayload, PedagogicalMode, AnalysisMetadata } from "@/types";
 import { getApiKeyManager } from "@/ai/providers/apiKeyManager";
 
 // Zod Schema xác thực dữ liệu DATA PACK theo chuẩn GDPT 2018
@@ -10,6 +12,7 @@ export const DataPackItemSchema = z.object({
     .object({
       fileId: z.string().optional(),
       page: z.union([z.string(), z.number()]).optional(),
+      quote: z.string().optional(),
     })
     .nullish(),
 });
@@ -47,6 +50,23 @@ export const VideoHookCandidateSchema = z.object({
   uses: z.array(z.string()).optional(),
 });
 
+export const AnalysisMetadataSchema = z.object({
+  engine: z.enum(["GEMINI_MULTIMODAL", "FALLBACK_SIMULATION"]),
+  model: z.string().optional(),
+  analyzedAt: z.string(),
+  filesReadCount: z.number(),
+  filesDetail: z
+    .array(
+      z.object({
+        filename: z.string(),
+        mimeType: z.string(),
+        sizeBytes: z.number(),
+      })
+    )
+    .optional(),
+  notes: z.string().optional(),
+});
+
 export const DataPackPayloadSchema = z.object({
   packId: z.string(),
   version: z.number().default(1),
@@ -68,25 +88,152 @@ export const DataPackPayloadSchema = z.object({
   videoHookCandidates: z.array(VideoHookCandidateSchema).default([]),
   missingData: z.array(z.string()).default([]),
   safetyFlags: z.array(z.string()).default([]),
+  analysisMetadata: AnalysisMetadataSchema.optional(),
 });
+
+const CANDIDATE_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-1.5-flash",
+  "gemini-2.5-flash",
+  "gemini-1.5-pro",
+];
+
+const MAX_TOTAL_BASE64_BYTES = 16 * 1024 * 1024; // 16MB an toàn cho REST request
 
 export class SourceAnalyzerAgent {
   /**
-   * Tạo DATA PACK sư phạm giả lập chất lượng cao dựa trên môn học và tên bài
+   * Tạo DATA PACK sư phạm mô phỏng chất lượng cao khi chưa có API Key
    */
-  static generateFallbackDataPack(project: Project, sources: SourceFile[]): DataPackPayload {
-    const subject = project.subject || "Lịch sử & Địa lí";
+  static generateFallbackDataPack(
+    project: Project,
+    sources: SourceFile[],
+    reasonNote?: string
+  ): DataPackPayload {
+    const subject = project.subject || "Khoa học tự nhiên";
     const grade = project.targetGrade || "Lớp 7";
-    const title = project.title.replace(/^Bài \d+:?\s*/i, "").trim() || "Văn minh Phục Hưng";
+    const title = project.title.replace(/^Bài \d+:?\s*/i, "").trim() || "Khám phá bài học";
 
     const isLichSuDiaLi = subject.toLowerCase().includes("lịch sử") || subject.toLowerCase().includes("địa");
     const isToan = subject.toLowerCase().includes("toán");
-    const isSinhHoc = subject.toLowerCase().includes("sinh");
+    const isSinhHoc = subject.toLowerCase().includes("sinh") || title.toLowerCase().includes("quang hợp") || title.toLowerCase().includes("tế bào");
     const isVatLy = subject.toLowerCase().includes("vật lý") || subject.toLowerCase().includes("vật lí");
 
     let payload: DataPackPayload;
 
-    if (isLichSuDiaLi) {
+    if (isSinhHoc || title.toLowerCase().includes("quang hợp")) {
+      payload = {
+        packId: `dp_${project.id}`,
+        version: 1,
+        subject: "Khoa học tự nhiên (Sinh học)",
+        grade,
+        bookSeries: "Kết nối tri thức với cuộc sống",
+        lessonTitle: project.title,
+        sourcePages: sources.map((s) => s.filename).slice(0, 5),
+        lessonType: ["Khám phá kiến thức mới", "Lý thuyết & Thí nghiệm"],
+        learningOutcomes: [
+          {
+            id: "YCCD-01",
+            content: `Nêu được vai trò trọng yếu của lá cây và bào quan lục lạp trong quá trình tổng hợp chất hữu cơ của "${title}".`,
+            source: { page: 42, quote: "Lá cây là cơ quan quang hợp chủ yếu của thực vật." },
+          },
+          {
+            id: "YCCD-02",
+            content: `Mô tả và viết được phương trình tổng quát của quá trình: Nước + Carbon dioxide ➔ Glucose + Oxygen (trong điều kiện có ánh sáng và diệp lục).`,
+            source: { page: 43, quote: "Nước và khí carbon dioxide được chuyển hóa thành chất hữu cơ và khí oxygen." },
+          },
+          {
+            id: "YCCD-03",
+            content: `Phân tích được các nhân tố môi trường (ánh sáng, nồng độ CO2, nước, nhiệt độ) ảnh hưởng trực tiếp đến hiệu suất quang hợp.`,
+            source: { page: 45 },
+          },
+        ],
+        keyKnowledge: [
+          {
+            id: "KT-01",
+            content: `Bản chất của quang hợp: Quá trình lá cây thu nhận và chuyển hóa năng lượng ánh sáng mặt trời thành năng lượng hóa học tích lũy trong các hợp chất hữu cơ (glucose/tinh bột).`,
+            source: { page: 42 },
+          },
+          {
+            id: "KT-02",
+            content: `Cơ chế trao đổi khí và nước: Khí CO2 đi vào qua khí khổng ở bề mặt lá, nước được rễ hút vận chuyển qua mạch gỗ lên lá, khí O2 được giải phóng ra môi trường.`,
+            source: { page: 43 },
+          },
+          {
+            id: "KT-03",
+            content: `Ý nghĩa sinh thái toàn cầu: Quang hợp tạo ra chuỗi thức ăn nuôi sống hầu hết sinh vật trên Trái Đất và điều hòa hàm lượng khí oxy trong khí quyển.`,
+            source: { page: 44 },
+          },
+        ],
+        terms: [
+          { id: "TN-01", content: "Lục lạp (Chloroplast): Bào quan quang hợp của tế bào thực vật chứa chất diệp lục hấp thụ ánh sáng." },
+          { id: "TN-02", content: "Khí khổng (Stomata): Các lỗ nhỏ li ti trên biểu bì lá chịu trách nhiệm đóng mở trao đổi khí và thoát hơi nước." },
+        ],
+        formulas: [
+          { id: "CT-01", content: "Phương trình quang hợp: 6CO₂ + 6H₂O ➔ C₆H₁₂O₆ + 6O₂ (Ánh sáng mặt trời & Diệp lục)" },
+        ],
+        data: [
+          { id: "DL-01", content: "Thực vật cung cấp hơn 90% lượng oxy và sinh khối dinh dưỡng trên toàn hành tinh." },
+        ],
+        figures: [
+          {
+            id: "HINH-01",
+            description: "Sơ đồ giải phẫu cắt ngang phiến lá cây hiển thị lớp biểu bì, tế bào mô giậu dày đặc lục lạp và gân lá.",
+            pedagogicalRole: "Giúp học sinh quan sát trực quan cấu tạo bên trong của lá cây mà mắt thường không thể nhìn thấy.",
+            source: { page: 42 },
+          },
+          {
+            id: "HINH-02",
+            description: "Sơ đồ dòng năng lượng và trao đổi khí qua bề mặt lá (mũi tên CO2 đi vào, O2 đi ra, ánh sáng chiếu vào).",
+            pedagogicalRole: "Mô hình hóa nguyên lý đầu vào (Input) và đầu ra (Output) của quá trình quang hợp.",
+            source: { page: 43 },
+          },
+        ],
+        examples: [
+          {
+            id: "VD-01",
+            content: "Thí nghiệm trồng hai cây con: Một cây để ngoài ánh sáng mặt trời phát triển xanh tốt, một cây úp trong hộp kín màu đen bị úa vàng và còi cọc.",
+          },
+        ],
+        misconceptions: [
+          {
+            id: "SAI-01",
+            misconception: "Học sinh thường lầm tưởng cây xanh chỉ quang hợp vào ban đêm hoặc quang hợp và hô hấp là một.",
+            correctionReference: "Quang hợp BẮT BUỘC cần ánh sáng mặt trời nên chỉ diễn ra vào ban ngày; ban đêm cây chỉ diễn ra quá trình hô hấp tế bào.",
+          },
+        ],
+        realLifeConnections: [
+          {
+            id: "TT-01",
+            connection: "Ứng dụng trong nông nghiệp thông minh: Bật đèn LED quang phổ chuyên dụng vào ban đêm trong nhà kính để thúc đẩy thanh long, dâu tây ra hoa quả trái vụ.",
+          },
+          {
+            id: "TT-02",
+            connection: "Ý thức bảo vệ môi trường: Trồng cây xanh trong trường học và đô thị để hấp thụ khí nhà kính và thanh lọc bụi mịn không khí.",
+          },
+        ],
+        videoHookCandidates: [
+          {
+            id: "HK-01",
+            mode: "EDU-01" as PedagogicalMode,
+            idea: "Đặt câu hỏi nghịch lý: 'Cây cối không có miệng, không ăn thức ăn như động vật, vậy điều kỳ diệu nào đã giúp một hạt sồi bé nhỏ lớn thành cây cổ thụ hàng chục tấn gỗ?'",
+          },
+          {
+            id: "HK-02",
+            mode: "EDU-02" as PedagogicalMode,
+            idea: "Thử thách 10 giây: 'Nếu Mặt Trời đột ngột ngừng chiếu sáng trong 30 ngày, điều gì sẽ xảy ra đầu tiên với lượng oxy của Trái Đất?'",
+          },
+        ],
+        missingData: [],
+        safetyFlags: [],
+        analysisMetadata: {
+          engine: "FALLBACK_SIMULATION",
+          analyzedAt: new Date().toISOString(),
+          filesReadCount: sources.length,
+          filesDetail: sources.map((s) => ({ filename: s.filename, mimeType: s.mimeType, sizeBytes: s.sizeBytes })),
+          notes: reasonNote || "Chưa phát hiện Gemini API Key hợp lệ. Hệ thống kích hoạt bộ dữ liệu mô phỏng sư phạm chuẩn hóa GDPT 2018.",
+        },
+      };
+    } else if (isLichSuDiaLi) {
       payload = {
         packId: `dp_${project.id}`,
         version: 1,
@@ -171,17 +318,18 @@ export class SourceAnalyzerAgent {
             mode: "EDU-01" as PedagogicalMode,
             idea: "Đặt câu hỏi bí ẩn: Tại sao nụ cười của nàng Mona Lisa sau hơn 500 năm vẫn khiến hàng triệu người khắp thế giới mê mẩn tìm lời giải?",
           },
-          {
-            id: "HK-02",
-            mode: "EDU-02" as PedagogicalMode,
-            idea: "Kịch tính hóa mâu thuẫn: Khi cả thế giới tin rằng Trái Đất là trung tâm vũ trụ, điều gì đã thúc đẩy các nhà khoa học mạo hiểm tính mạng để bảo vệ chân lý?",
-          },
         ],
         missingData: [],
         safetyFlags: [],
+        analysisMetadata: {
+          engine: "FALLBACK_SIMULATION",
+          analyzedAt: new Date().toISOString(),
+          filesReadCount: sources.length,
+          filesDetail: sources.map((s) => ({ filename: s.filename, mimeType: s.mimeType, sizeBytes: s.sizeBytes })),
+          notes: reasonNote || "Chưa phát hiện Gemini API Key hợp lệ. Hệ thống kích hoạt bộ dữ liệu mô phỏng sư phạm chuẩn hóa GDPT 2018.",
+        },
       };
     } else {
-      // Mẫu chuẩn cho các môn học khác
       payload = {
         packId: `dp_${project.id}`,
         version: 1,
@@ -249,6 +397,13 @@ export class SourceAnalyzerAgent {
         ],
         missingData: [],
         safetyFlags: [],
+        analysisMetadata: {
+          engine: "FALLBACK_SIMULATION",
+          analyzedAt: new Date().toISOString(),
+          filesReadCount: sources.length,
+          filesDetail: sources.map((s) => ({ filename: s.filename, mimeType: s.mimeType, sizeBytes: s.sizeBytes })),
+          notes: reasonNote || "Chưa phát hiện Gemini API Key hợp lệ. Hệ thống kích hoạt bộ dữ liệu mô phỏng sư phạm chuẩn hóa GDPT 2018.",
+        },
       };
     }
 
@@ -256,87 +411,259 @@ export class SourceAnalyzerAgent {
   }
 
   /**
-   * Gọi AI (Gemini qua key rotation) hoặc Fallback để tạo DATA PACK
+   * Đọc các tệp tài liệu thực tế từ đĩa và nạp vào mảng Gemini Parts (Hỗ trợ PDF & Hình ảnh đa phương thức)
+   */
+  private static async loadMultimodalParts(sources: SourceFile[]): Promise<{
+    parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>;
+    loadedCount: number;
+  }> {
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [];
+    let currentTotalBytes = 0;
+    let loadedCount = 0;
+
+    for (const source of sources) {
+      if (!source.storageKey) continue;
+
+      try {
+        const fileBuffer = await fs.readFile(source.storageKey);
+        if (!fileBuffer || fileBuffer.length === 0) continue;
+
+        // Kiểm tra tổng dung lượng để không vượt quá giới hạn REST payload của Gemini (16MB)
+        if (currentTotalBytes + fileBuffer.length > MAX_TOTAL_BASE64_BYTES) {
+          // Nếu đã nạp đủ các tệp quan trọng, tệp sau ghi nhận dạng văn bản
+          parts.push({
+            text: `[Tệp bổ sung không đính kèm ảnh do vượt giới hạn dung lượng: ${source.filename} (${Math.round(source.sizeBytes / 1024)} KB)]`,
+          });
+          continue;
+        }
+
+        const ext = path.extname(source.filename).toLowerCase();
+        let mimeType = source.mimeType;
+
+        if (ext === ".pdf" || mimeType.includes("pdf")) {
+          mimeType = "application/pdf";
+        } else if (ext === ".png") {
+          mimeType = "image/png";
+        } else if (ext === ".webp") {
+          mimeType = "image/webp";
+        } else if (ext === ".jpg" || ext === ".jpeg") {
+          mimeType = "image/jpeg";
+        }
+
+        const base64Data = fileBuffer.toString("base64");
+        parts.push({
+          inlineData: {
+            mimeType,
+            data: base64Data,
+          },
+        });
+
+        currentTotalBytes += fileBuffer.length;
+        loadedCount += 1;
+      } catch (err: unknown) {
+        // File không tìm thấy trên đĩa (ví dụ môi trường serverless không persistent), bổ sung mô tả
+        console.warn(`[SourceAnalyzer] Không đọc được tệp từ đĩa ${source.storageKey}:`, err);
+        parts.push({
+          text: `[Tệp tài liệu: ${source.filename} - Dung lượng: ${Math.round(source.sizeBytes / 1024)} KB]`,
+        });
+      }
+    }
+
+    return { parts, loadedCount };
+  }
+
+  /**
+   * Gọi Gemini API phân tích chuyên sâu đa phương thức (Multimodal) với vai trò Chuyên gia Sư phạm & Đọc sách Giáo khoa
    */
   static async analyzeProjectSources(project: Project, sources: SourceFile[]): Promise<DataPack> {
     const keyManager = getApiKeyManager();
-    const apiKey = await keyManager.getNextActiveKey();
+    const activeKeys = await keyManager.getActiveKeys();
 
-    let payload: DataPackPayload;
+    let payload: DataPackPayload | null = null;
+    let fallbackReason = "";
 
-    if (apiKey) {
-      try {
-        // Gọi Google Gemini API với JSON mode
-        const systemPrompt = `Bạn là Chuyên gia Sư phạm và Nhà thiết kế Học liệu số GDPT 2018 (Lead Educational Architect).
-Nhiệm vụ: Phân tích tài liệu nguồn bài giảng để trích xuất thành DATA PACK chuẩn mực cho việc sản xuất video bài giảng ngắn.
-Đầu ra PHẢI là một đối tượng JSON hợp lệ tuân thủ đúng định dạng:
+    // 1. Chuẩn bị tài liệu đa phương thức (Multimodal Parts)
+    const { parts: fileParts, loadedCount } = await this.loadMultimodalParts(sources);
+
+    // 2. Hệ thống Prompt của Chuyên gia Đọc sách Sư phạm
+    const systemPrompt = `BẠN LÀ MỘT CHUYÊN GIA THƯỢNG CẤP VỀ ĐỌC SÁCH GIÁO KHOA & THẨM ĐỊNH HỌC LIỆU SƯ PHẠM (CHƯƠNG TRÌNH GDPT 2018).
+
+NHIỆM VỤ CỦA CHUYÊN GIA:
+1. ĐỌC KỸ LƯỠNG TỪNG TRANG TÀI LIỆU/SÁCH ĐÍNH KÈM:
+   - Quét và đọc sâu toàn bộ nội dung trong tệp hình ảnh / tài liệu PDF được đính kèm.
+   - Đọc từng tiêu đề bài, mục I, II, III, các đoạn văn bản giải thích, các bảng số liệu, các hình vẽ/sơ đồ và các hộp chú thích ("Em có biết", "Góc mở rộng").
+   - Xác định chính xác: Tên bài học, Khối lớp, Môn học, Bộ sách giáo khoa (Kết nối tri thức / Cánh Diều / Chân trời sáng tạo / GDPT 2018).
+
+2. TRÍCH XUẤT ĐÚNG TRỌNG TÂM - TUYỆT ĐỐI CHÍNH XÁC VÀ TẬP TRUNG (FIDELITY & FOCUS):
+   - Mọi kiến thức trích xuất PHẢI bám sát 100% ngữ liệu thực tế từ tài liệu được tải lên. Tuyệt đối không bịa đặt, không sáng tác ngoài phạm vi sách.
+   - Ghi rõ nguồn trích dẫn: Số trang (page) và đoạn trích dẫn (quote).
+   - Tập trung vào các tri thức quan trọng nhất cần ghi nhớ để chuẩn bị cho việc sản xuất Video Bài học Sư phạm ngắn (60 - 90 giây).
+
+3. ĐẦU RA BẮT BUỘC: PHẢI là một chuỗi JSON hợp lệ không bọc trong markdown code fence, tuân thủ đúng định dạng:
 {
   "packId": "dp_${project.id}",
   "version": 1,
-  "subject": "${project.subject || ""}",
-  "grade": "${project.targetGrade || ""}",
-  "bookSeries": "Kết nối tri thức / Cánh Diều / Chân trời sáng tạo",
+  "subject": "${project.subject || "Xác định từ sách"}",
+  "grade": "${project.targetGrade || "Xác định từ sách"}",
+  "bookSeries": "Xác định từ sách (Kết nối tri thức / Cánh Diều / Chân trời sáng tạo)",
   "lessonTitle": "${project.title}",
-  "sourcePages": ["1", "2"],
-  "lessonType": ["Lý thuyết khám phá"],
-  "learningOutcomes": [ { "id": "YCCD-01", "content": "...", "source": { "page": 1 } } ],
-  "keyKnowledge": [ { "id": "KT-01", "content": "...", "source": { "page": 1 } } ],
-  "terms": [ { "id": "TN-01", "content": "..." } ],
-  "formulas": [ { "id": "CT-01", "content": "..." } ],
-  "data": [ { "id": "DL-01", "content": "..." } ],
-  "figures": [ { "id": "HINH-01", "description": "...", "pedagogicalRole": "..." } ],
-  "examples": [ { "id": "VD-01", "content": "..." } ],
-  "misconceptions": [ { "id": "SAI-01", "misconception": "...", "correctionReference": "..." } ],
-  "realLifeConnections": [ { "id": "TT-01", "connection": "..." } ],
-  "videoHookCandidates": [ { "id": "HK-01", "mode": "EDU-01", "idea": "..." } ],
+  "sourcePages": ["Trang 1", "Trang 2"],
+  "lessonType": ["Khám phá kiến thức mới", "Lý thuyết trọng tâm"],
+  "learningOutcomes": [
+    {
+      "id": "YCCD-01",
+      "content": "Yêu cầu cần đạt dùng đúng động từ hành vi sư phạm GDPT 2018: Nhận biết / Trình bày / Phân tích / Giải thích / Vận dụng...",
+      "source": { "page": 1, "quote": "Đoạn trích từ sách" }
+    }
+  ],
+  "keyKnowledge": [
+    {
+      "id": "KT-01",
+      "content": "Kiến thức trọng tâm cô đọng, nêu rõ bản chất, quy luật, cơ chế khoa học hoặc sự kiện lịch sử/địa lí",
+      "source": { "page": 1 }
+    }
+  ],
+  "terms": [
+    { "id": "TN-01", "content": "Thuật ngữ hoặc khái niệm mới được giải nghĩa chính xác theo sách giáo khoa" }
+  ],
+  "formulas": [
+    { "id": "CT-01", "content": "Công thức toán/lý/hóa hoặc sơ đồ phản ứng/mô hình nếu có trong bài" }
+  ],
+  "data": [
+    { "id": "DL-01", "content": "Số liệu chính xác, mốc thời gian, dữ kiện định lượng xuất hiện trong bài" }
+  ],
+  "figures": [
+    {
+      "id": "HINH-01",
+      "description": "Mô tả chi tiết nội dung của bức hình/sơ đồ/biểu đồ có trong trang sách",
+      "pedagogicalRole": "Phân tích vai trò sư phạm: Hình ảnh này giúp học sinh giải quyết khó khăn nhận thức gì?",
+      "source": { "page": 1 }
+    }
+  ],
+  "examples": [
+    { "id": "VD-01", "content": "Ví dụ thực tiễn hoặc bài tập điển hình được đưa ra trong sách" }
+  ],
+  "misconceptions": [
+    {
+      "id": "SAI-01",
+      "misconception": "Lỗ hổng nhận thức hoặc hiểu lầm mà học sinh thường gặp phải ở bài này",
+      "correctionReference": "Căn cứ khoa học chuẩn mực từ bài học để đính chính hiểu lầm đó"
+    }
+  ],
+  "realLifeConnections": [
+    { "id": "TT-01", "connection": "Liên hệ thực tiễn sinh động, ứng dụng kiến thức vào cuộc sống đời thường" }
+  ],
+  "videoHookCandidates": [
+    { "id": "HK-01", "mode": "EDU-01", "idea": "Ý tưởng câu hỏi nghịch lý nhận thức hoặc tình huống có vấn đề để mở đầu video 5-10 giây đầu" },
+    { "id": "HK-02", "mode": "EDU-02", "idea": "Ý tưởng câu đố tương tác 10 giây thử thách người xem suy đoán" },
+    { "id": "HK-03", "mode": "EDU-05", "idea": "Ý tưởng mở đầu bằng một câu chuyện gần gũi trong đời sống thực tế" }
+  ],
   "missingData": [],
   "safetyFlags": []
 }`;
 
-        const userPrompt = `Hãy phân tích bài học: "${project.title}", Môn: "${project.subject || ""}", Lớp: "${project.targetGrade || ""}".
-Danh sách tệp tài liệu đã nạp: ${sources.map((s) => `${s.filename} (${s.pageCount || 1} trang)`).join(", ")}.
-Vui lòng trích xuất chi tiết ít nhất 3 Yêu cầu cần đạt (YCCD), 3 Kiến thức trọng tâm (KT), thuật ngữ, sai lầm phổ biến và 2 ý tưởng Video Hook độc đáo.`;
+    const userPrompt = `Dưới đây là nội dung toàn văn và hình ảnh các trang sách giáo khoa / tài liệu được tải lên cho bài học: "${project.title}".
+Môn học đăng ký: "${project.subject || "Chưa xác định"}", Khối lớp: "${project.targetGrade || "Chưa xác định"}".
+Tổng số tài liệu đính kèm: ${sources.length} tệp (${loadedCount} tệp đã nạp dữ liệu nhị phân trực tiếp).
+Danh sách tệp: ${sources.map((s) => s.filename).join(", ")}.
 
-        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-        const response = await fetch(geminiUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
-            generationConfig: {
-              responseMimeType: "application/json",
-              temperature: 0.2,
-            },
-          }),
-        });
+Với vai trò là Chuyên gia Đọc sách và Thẩm định Sư phạm GDPT 2018, hãy đọc kỹ lưỡng toàn bộ văn bản và kênh hình trong các trang sách được đính kèm này, trích xuất dữ liệu chi tiết, chuẩn xác và tập trung cao độ để hoàn thiện đối tượng JSON DATA PACK.`;
 
-        if (response.ok) {
-          const resJson = await response.json();
-          const text = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (text) {
-            const parsed = JSON.parse(text);
-            const validated = DataPackPayloadSchema.safeParse(parsed);
-            if (validated.success) {
-              await keyManager.markKeySuccess(apiKey);
-              payload = validated.data;
-            } else {
-              payload = this.generateFallbackDataPack(project, sources);
-            }
-          } else {
-            payload = this.generateFallbackDataPack(project, sources);
-          }
-        } else {
-          if (response.status === 429) {
-            await keyManager.markKeyRateLimited(apiKey);
-          }
-          payload = this.generateFallbackDataPack(project, sources);
+    // 3. Thử nghiệm gọi Gemini API với danh sách Keys và Candidate Models
+    if (activeKeys.length > 0) {
+      keyLoop: for (const apiKey of activeKeys) {
+        // Bỏ qua các placeholder key giả lập
+        if (apiKey.includes("NumberOne") || apiKey.includes("11111111111111") || apiKey.length < 20) {
+          continue;
         }
-      } catch {
-        payload = this.generateFallbackDataPack(project, sources);
+
+        for (const model of CANDIDATE_MODELS) {
+          try {
+            const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+            // Ghép prompt và file parts
+            const requestContents = [
+              {
+                parts: [
+                  { text: `${systemPrompt}\n\n${userPrompt}` },
+                  ...fileParts,
+                ],
+              },
+            ];
+
+            const response = await fetch(geminiUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                contents: requestContents,
+                generationConfig: {
+                  responseMimeType: "application/json",
+                  temperature: 0.2,
+                },
+              }),
+            });
+
+            if (response.ok) {
+              const resJson = await response.json();
+              const text = resJson.candidates?.[0]?.content?.parts?.[0]?.text;
+
+              if (text) {
+                // Làm sạch markdown nếu có
+                const cleanedText = text.replace(/^```json\s*/i, "").replace(/```\s*$/i, "").trim();
+                const parsed = JSON.parse(cleanedText);
+                const validated = DataPackPayloadSchema.safeParse(parsed);
+
+                if (validated.success) {
+                  await keyManager.markKeySuccess(apiKey);
+
+                  const metadata: AnalysisMetadata = {
+                    engine: "GEMINI_MULTIMODAL",
+                    model,
+                    analyzedAt: new Date().toISOString(),
+                    filesReadCount: loadedCount,
+                    filesDetail: sources.map((s) => ({
+                      filename: s.filename,
+                      mimeType: s.mimeType,
+                      sizeBytes: s.sizeBytes,
+                    })),
+                    notes: `Đã đọc và phân tích chi tiết ${loadedCount} tài liệu trực tiếp bằng mô hình Google Gemini (${model}).`,
+                  };
+
+                  payload = {
+                    ...validated.data,
+                    analysisMetadata: metadata,
+                  };
+                  break keyLoop;
+                }
+              }
+            } else {
+              const errBody = await response.text();
+
+              if (response.status === 429) {
+                await keyManager.markKeyRateLimited(apiKey);
+                break; // Thử key khác
+              } else if (response.status === 400 && (errBody.includes("API key not valid") || errBody.includes("INVALID_ARGUMENT"))) {
+                await keyManager.markKeyInvalid(apiKey);
+                break; // Thử key khác
+              } else if (response.status === 404) {
+                // Model không tồn tại hoặc chưa mở ở vùng này -> thử model tiếp theo
+                continue;
+              } else {
+                fallbackReason = `Lỗi phản hồi từ Gemini (${response.status}): ${errBody.slice(0, 100)}`;
+              }
+            }
+          } catch (err: unknown) {
+            fallbackReason = err instanceof Error ? err.message : "Lỗi kết nối Gemini API";
+          }
+        }
       }
     } else {
-      // Chế độ mô phỏng sư phạm thông minh khi chưa có API key
-      payload = this.generateFallbackDataPack(project, sources);
+      fallbackReason = "Chưa có Gemini API Key nào được cài đặt trong hệ thống.";
+    }
+
+    // 4. Nếu không có kết quả từ Gemini API -> Fallback mô phỏng sư phạm chuẩn
+    if (!payload) {
+      payload = this.generateFallbackDataPack(project, sources, fallbackReason);
     }
 
     const dataPack: DataPack = {

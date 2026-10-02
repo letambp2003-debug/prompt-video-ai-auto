@@ -84,7 +84,9 @@ export type DataPackStatus = "DRAFT" | "REVIEWED" | "APPROVED" | "SUPERSEDED";
 
 export interface DataPackItemSource {
   fileId?: string;
+  filename?: string;
   page?: string | number;
+  quote?: string;
 }
 
 export interface DataPackItem {
@@ -105,6 +107,7 @@ export interface MisconceptionItem {
   misconception: string;
   correctionReference?: string;
   relatedKnowledgeId?: string;
+  pedagogicalNote?: string;
 }
 
 export interface RealLifeConnectionItem {
@@ -119,6 +122,15 @@ export interface VideoHookCandidate {
   mode: PedagogicalMode;
   idea: string;
   uses?: string[];
+}
+
+export interface AnalysisMetadata {
+  engine: "GEMINI_MULTIMODAL" | "FALLBACK_SIMULATION";
+  model?: string;
+  analyzedAt: string;
+  filesReadCount: number;
+  filesDetail?: Array<{ filename: string; mimeType: string; sizeBytes: number }>;
+  notes?: string;
 }
 
 export interface DataPackPayload {
@@ -142,6 +154,7 @@ export interface DataPackPayload {
   videoHookCandidates: VideoHookCandidate[];   // HK-xx
   missingData: string[];
   safetyFlags: string[];
+  analysisMetadata?: AnalysisMetadata;
 }
 
 export interface DataPack {

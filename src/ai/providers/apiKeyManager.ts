@@ -180,7 +180,7 @@ export class ApiKeyManager {
   }
 
   /**
-   * Lấy API Key tiếp theo theo cơ chế Round-Robin và tự động bỏ qua key đang Cooldown
+   * Lấy API Key tiếp theo theo cơ chế Round-Robin và tự động bỏ qua key đang Cooldown / Invalid
    */
   async getNextActiveKey(): Promise<string | null> {
     await this.init();
@@ -198,17 +198,31 @@ export class ApiKeyManager {
       }
     }
 
-    // Tìm key khả dụng
+    // Tìm key khả dụng (chỉ lấy ACTIVE, không lấy INVALID)
     const availableKeys = this.keys.filter((k) => k.status === "ACTIVE");
     if (availableKeys.length === 0) {
-      // Nếu tất cả đều cooldown, trả về key đầu tiên có thời gian chờ ngắn nhất
-      return this.keys[0].key;
+      // Nếu tất cả đều cooldown (không có key nào active nhưng có key không invalid)
+      const nonInvalid = this.keys.filter((k) => k.status !== "INVALID");
+      if (nonInvalid.length > 0) {
+        return nonInvalid[0].key;
+      }
+      return null;
     }
 
     const keyItem = availableKeys[this.currentIndex % availableKeys.length];
     this.currentIndex = (this.currentIndex + 1) % availableKeys.length;
     keyItem.lastUsedAt = new Date().toISOString();
     return keyItem.key;
+  }
+
+  /**
+   * Lấy danh sách tất cả các key đang khả dụng để thử nghiệm theo thứ tự
+   */
+  async getActiveKeys(): Promise<string[]> {
+    await this.init();
+    const active = this.keys.filter((k) => k.status === "ACTIVE").map((k) => k.key);
+    if (active.length > 0) return active;
+    return this.keys.filter((k) => k.status !== "INVALID").map((k) => k.key);
   }
 
   /**
@@ -237,6 +251,40 @@ export class ApiKeyManager {
     if (item) {
       item.status = "INVALID";
       item.failureCount += 1;
+    }
+  }
+
+  /**
+   * Kiểm tra trực tiếp tính hợp lệ của một API Key với Gemini API
+   */
+  async validateKeyWithGemini(key: string): Promise<{ ok: boolean; status: "ACTIVE" | "COOLDOWN" | "INVALID"; message: string }> {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ parts: [{ text: "ping" }] }] }),
+      });
+
+      if (res.ok) {
+        await this.markKeySuccess(key);
+        return { ok: true, status: "ACTIVE", message: "API Key hoạt động hoàn hảo!" };
+      }
+
+      if (res.status === 429) {
+        await this.markKeyRateLimited(key);
+        return { ok: false, status: "COOLDOWN", message: "API Key tạm thời chạm giới hạn lượt gọi (Rate Limit), sẽ tự động phục hồi sau 60s." };
+      }
+
+      const errText = await res.text();
+      if (res.status === 400 && (errText.includes("API key not valid") || errText.includes("INVALID_ARGUMENT"))) {
+        await this.markKeyInvalid(key);
+        return { ok: false, status: "INVALID", message: "API Key không hợp lệ. Vui lòng kiểm tra lại mã key trên Google AI Studio." };
+      }
+
+      return { ok: false, status: "COOLDOWN", message: `Phản hồi lỗi (${res.status}): ${errText.slice(0, 100)}` };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Lỗi kết nối mạng tới Google Gemini";
+      return { ok: false, status: "COOLDOWN", message: msg };
     }
   }
 

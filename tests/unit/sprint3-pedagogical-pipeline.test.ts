@@ -22,6 +22,7 @@ describe("Sprint 3 — End-to-End Pedagogical Pipeline", () => {
     testProject = await repo.createProject({
       title: "Quang hợp ở thực vật",
       taskType: "LESSON",
+      status: "NEW",
       subject: "Khoa học tự nhiên",
       targetGrade: "Lớp 7",
       targetAudience: "Học sinh THCS",
@@ -34,10 +35,14 @@ describe("Sprint 3 — End-to-End Pedagogical Pipeline", () => {
       version: 1,
       status: "APPROVED",
       payload: {
+        packId: `dp_${testProject.id}`,
+        version: 1,
         lessonTitle: "Quang hợp ở thực vật",
         subject: "Khoa học tự nhiên",
         grade: "Lớp 7",
         bookSeries: "Kết nối tri thức",
+        sourcePages: ["sgk.pdf (trang 42-45)"],
+        lessonType: ["Lý thuyết & Khám phá"],
         learningOutcomes: [
           {
             id: "YCCD-01",
@@ -48,19 +53,21 @@ describe("Sprint 3 — End-to-End Pedagogical Pipeline", () => {
         keyKnowledge: [
           {
             id: "KT-01",
-            title: "Khái niệm quang hợp",
-            content: "Quá trình lá cây sử dụng ánh sáng để biến đổi nước và CO2 thành glucose và O2",
+            content: "Khái niệm quang hợp: Quá trình lá cây sử dụng ánh sáng để biến đổi nước và CO2 thành glucose và O2",
             source: { fileId: "src_1", filename: "sgk.pdf", page: 42 },
           },
         ],
         terms: [
           {
             id: "TN-01",
-            term: "Lục lạp",
-            definition: "Bào quan chứa chất diệp lục hấp thụ ánh sáng mặt trời",
+            content: "Lục lạp: Bào quan chứa chất diệp lục hấp thụ ánh sáng mặt trời",
             source: { fileId: "src_1", filename: "sgk.pdf", page: 43 },
           },
         ],
+        formulas: [],
+        data: [],
+        figures: [],
+        examples: [],
         misconceptions: [
           {
             id: "SAI-01",
@@ -69,7 +76,14 @@ describe("Sprint 3 — End-to-End Pedagogical Pipeline", () => {
             pedagogicalNote: "Cần nhấn mạnh điều kiện ánh sáng",
           },
         ],
-        order: ["YCCD-01", "KT-01"],
+        realLifeConnections: [
+          { id: "TT-01", connection: "Ứng dụng chiếu sáng quang hợp trong nhà kính" },
+        ],
+        videoHookCandidates: [
+          { id: "HK-01", mode: "EDU-01", idea: "Câu hỏi nghịch lý mở đầu về cây xanh" },
+        ],
+        missingData: [],
+        safetyFlags: [],
       },
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
