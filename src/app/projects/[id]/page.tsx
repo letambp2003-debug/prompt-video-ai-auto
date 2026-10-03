@@ -802,6 +802,10 @@ export default function ProjectWorkspacePage() {
       {isLesson && activeStep === "EXPORT" ? (
         <ExportViewer
           project={project}
+          dataPack={dataPack}
+          script={script}
+          storyboard={storyboard}
+          qcReport={qcReport}
           onBackToStoryboard={() => setActiveStep("STORYBOARD")}
           onBackToQC={() => setActiveStep("QC")}
         />

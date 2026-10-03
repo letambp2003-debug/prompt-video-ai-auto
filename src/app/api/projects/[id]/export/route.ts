@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getProjectRepository } from "@/server/repositories";
-import { ApiResponse } from "@/types";
+import { ApiResponse, Project, DataPack, Script, Storyboard, QCReport } from "@/types";
+import { generateExportPackage } from "@/utils/exportGenerator";
 
 export const maxDuration = 30;
 
@@ -25,89 +26,118 @@ export async function GET(
     const storyboard = await repo.getStoryboardByProjectId(projectId);
     const qc = await repo.getLatestQCReport(projectId);
 
-    // Sinh Markdown Production Pack
-    const title = project.title;
-    const subject = project.subject || "Chưa xác định";
-    const grade = project.targetGrade || "Chưa xác định";
-
-    let md = `# EDU VIDEO DIRECTOR PRO — HỒ SƠ SẢN XUẤT VIDEO SƯ PHẠM\n\n`;
-    md += `**Tên bài học:** ${title}\n`;
-    md += `**Môn học:** ${subject} • **Khối lớp:** ${grade}\n`;
-    md += `**Thời lượng dự kiến:** ${project.durationSeconds || 60} giây • **MODE Sư phạm:** ${project.selectedMode || "EDU-01"}\n`;
-    md += `**Ngày tạo:** ${new Date(project.createdAt).toLocaleDateString("vi-VN")}\n\n`;
-    md += `---\n\n`;
-
-    if (dataPack) {
-      md += `## 1. DATA PACK (TRI THỨC CHUẨN GDPT 2018)\n\n`;
-      md += `### Yêu cầu cần đạt (YCCD):\n`;
-      dataPack.payload.learningOutcomes.forEach((y) => {
-        md += `- **[${y.id}]**: ${y.content} *(Trang ${y.source?.page || 1})*\n`;
-      });
-      md += `\n### Kiến thức trọng tâm (KT):\n`;
-      dataPack.payload.keyKnowledge.forEach((k) => {
-        md += `- **[${k.id}]**: ${k.content}\n`;
-      });
-      md += `\n### Hiểu lầm của học sinh (SAI):\n`;
-      dataPack.payload.misconceptions.forEach((s) => {
-        md += `- **[${s.id}]**: ${s.misconception} => *${s.correctionReference || "Đính chính"}*\n`;
-      });
-      md += `\n---\n\n`;
+    try {
+      await repo.updateProject(projectId, { status: "COMPLETED" });
+    } catch {
+      // Ignore
     }
 
-    if (script) {
-      md += `## 2. KỊCH BẢN PHÂN ĐOẠN (TIMELINE SCRIPT)\n\n`;
-      script.payload.timeline.forEach((item) => {
-        md += `### Cảnh ${item.sceneNumber} (${item.timeRange}): ${item.purpose}\n`;
-        md += `- **Thị giác:** ${item.visualSummary}\n`;
-        md += `- **Hành động:** ${item.action}\n`;
-        md += `- **Lời thoại / Voiceover:** "${item.dialogueOrVoiceover}"\n`;
-        md += `- **Âm thanh (SFX/Music):** ${item.sfxOrMusic}\n\n`;
-      });
-      md += `---\n\n`;
-    }
-
-    let promptPack = `=== BỘ PROMPT VIDEO SẢN XUẤT (GOOGLE FLOW & VEO) ===\n\n`;
-    if (storyboard) {
-      md += `## 3. STORYBOARD & PROMPT SẢN XUẤT (GOOGLE FLOW / VEO)\n\n`;
-      storyboard.scenes.forEach((scene) => {
-        const cam = scene.cameraMove || scene.camera || "Standard Cinematic Shot";
-        const prompt = scene.promptFlowVeo || scene.videoPrompt || "";
-
-        md += `### Scene ${scene.sceneNumber}: ${scene.title}\n`;
-        md += `- **Thời lượng:** ${scene.durationSeconds}s | **Góc quay:** ${cam}\n`;
-        md += `- **Video Prompt (Veo/Flow):**\n\`\`\`\n${prompt}\n\`\`\`\n\n`;
-
-        promptPack += `--- SCENE ${scene.sceneNumber} (${scene.durationSeconds}s) ---\n`;
-        promptPack += `${prompt}\n\n`;
-      });
-      md += `---\n\n`;
-    }
-
-    if (qc && qc.dimensions) {
-      md += `## 4. BÁO CÁO ĐÁNH GIÁ CHẤT LƯỢNG SƯ PHẠM (QC GATE: ${qc.score || 96}/100)\n\n`;
-      md += `- **Khớp nguồn học liệu:** ${qc.dimensions.sourceFidelity.score}/100 (${qc.dimensions.sourceFidelity.notes})\n`;
-      md += `- **Tính sư phạm & MODE:** ${qc.dimensions.pedagogicalSoundness.score}/100 (${qc.dimensions.pedagogicalSoundness.notes})\n`;
-      md += `- **Khóa liên tục nhân vật & bối cảnh:** ${qc.dimensions.continuityMasterLock.score}/100 (${qc.dimensions.continuityMasterLock.notes})\n`;
-      md += `- **Khả thi kỹ thuật Veo/Flow:** ${qc.dimensions.videoFeasibility.score}/100 (${qc.dimensions.videoFeasibility.notes})\n`;
-      md += `- **An toàn học đường:** ${qc.dimensions.schoolSafety.score}/100 (${qc.dimensions.schoolSafety.notes})\n\n`;
-    }
-
-    // Cập nhật trạng thái hoàn thành
-    await repo.updateProject(projectId, { status: "COMPLETED" });
+    const exportPackage = generateExportPackage(project, dataPack, script, storyboard, qc);
 
     return NextResponse.json({
       ok: true,
-      data: {
-        markdown: md,
-        promptPack,
-        jsonPackage: {
-          project,
-          dataPack,
-          script,
-          storyboard,
-          qc,
-        },
-      },
+      data: exportPackage,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Lỗi khi xuất bản hồ sơ sản xuất";
+    return NextResponse.json(
+      { ok: false, error: { code: "EXPORT_FAILED", message } },
+      { status: 500 }
+    );
+  }
+}
+
+export async function POST(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+): Promise<NextResponse<ApiResponse<{ markdown: string; promptPack: string; jsonPackage: object }>>> {
+  try {
+    const { id: projectId } = await params;
+    const repo = getProjectRepository();
+
+    let body: {
+      project?: Project;
+      dataPack?: DataPack;
+      script?: Script;
+      storyboard?: Storyboard;
+      qc?: QCReport;
+    } = {};
+
+    try {
+      body = await req.json();
+    } catch {
+      // Empty body
+    }
+
+    let project = await repo.getProjectById(projectId);
+    if (!project && body.project) {
+      try {
+        project = await repo.upsertProject({ ...body.project, id: projectId });
+      } catch {
+        project = body.project;
+      }
+    }
+    if (!project && body.project) {
+      project = body.project;
+    }
+    if (!project) {
+      return NextResponse.json(
+        { ok: false, error: { code: "PROJECT_NOT_FOUND", message: "Không tìm thấy dự án." } },
+        { status: 404 }
+      );
+    }
+
+    let dataPack = await repo.getDataPackByProjectId(projectId);
+    if (!dataPack && body.dataPack) {
+      try {
+        dataPack = await repo.saveDataPack({ ...body.dataPack, projectId });
+      } catch {
+        dataPack = body.dataPack;
+      }
+    }
+    if (!dataPack && body.dataPack) dataPack = body.dataPack;
+
+    let script = await repo.getScriptByProjectId(projectId);
+    if (!script && body.script) {
+      try {
+        script = await repo.saveScript({ ...body.script, projectId });
+      } catch {
+        script = body.script;
+      }
+    }
+    if (!script && body.script) script = body.script;
+
+    let storyboard = await repo.getStoryboardByProjectId(projectId);
+    if (!storyboard && body.storyboard) {
+      try {
+        storyboard = await repo.saveStoryboard({ ...body.storyboard, projectId });
+      } catch {
+        storyboard = body.storyboard;
+      }
+    }
+    if (!storyboard && body.storyboard) storyboard = body.storyboard;
+
+    let qc = await repo.getLatestQCReport(projectId);
+    if (!qc && body.qc) {
+      try {
+        qc = await repo.saveQCReport({ ...body.qc, projectId });
+      } catch {
+        qc = body.qc;
+      }
+    }
+    if (!qc && body.qc) qc = body.qc;
+
+    try {
+      await repo.updateProject(projectId, { status: "COMPLETED" });
+    } catch {
+      // Ignore
+    }
+
+    const exportPackage = generateExportPackage(project, dataPack, script, storyboard, qc);
+
+    return NextResponse.json({
+      ok: true,
+      data: exportPackage,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Lỗi khi xuất bản hồ sơ sản xuất";

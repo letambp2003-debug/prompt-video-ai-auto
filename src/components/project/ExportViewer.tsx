@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
-import { Project } from "@/types";
+import { Project, DataPack, Script, Storyboard, QCReport } from "@/types";
 import {
   Download,
   Copy,
@@ -16,15 +16,30 @@ import {
   Layers,
   ExternalLink,
 } from "lucide-react";
+import {
+  getDataPackLocal,
+  getScriptLocal,
+  getStoryboardLocal,
+  getQCReportLocal,
+} from "@/utils/projectStorage";
+import { generateExportPackage } from "@/utils/exportGenerator";
 
 interface ExportViewerProps {
   project: Project;
+  dataPack?: DataPack | null;
+  script?: Script | null;
+  storyboard?: Storyboard | null;
+  qcReport?: QCReport | null;
   onBackToStoryboard: () => void;
   onBackToQC: () => void;
 }
 
 export const ExportViewer: React.FC<ExportViewerProps> = ({
   project,
+  dataPack,
+  script,
+  storyboard,
+  qcReport,
   onBackToStoryboard,
   onBackToQC,
 }) => {
@@ -40,23 +55,51 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
 
   useEffect(() => {
     const fetchExport = async () => {
+      // 1. Thu thập dữ liệu từ props hoặc từ localStorage của trình duyệt
+      const resolvedDataPack = dataPack || getDataPackLocal(project.id);
+      const resolvedScript = script || getScriptLocal(project.id);
+      const resolvedStoryboard = storyboard || getStoryboardLocal(project.id);
+      const resolvedQC = qcReport || getQCReportLocal(project.id);
+
+      // 2. Tạo trước bộ hồ sơ cục bộ (đảm bảo hiển thị ngay lập tức, không bao giờ bị trắng trang hay lỗi)
+      const immediatePackage = generateExportPackage(
+        project,
+        resolvedDataPack,
+        resolvedScript,
+        resolvedStoryboard,
+        resolvedQC
+      );
+      setData(immediatePackage);
+      setIsLoading(false);
+      setError(null);
+
+      // 3. Đồng bộ và làm giàu dữ liệu qua Serverless POST endpoint
       try {
-        setIsLoading(true);
-        const res = await fetch(`/api/projects/${project.id}/export`);
+        const res = await fetch(`/api/projects/${project.id}/export`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            project,
+            dataPack: resolvedDataPack,
+            script: resolvedScript,
+            storyboard: resolvedStoryboard,
+            qc: resolvedQC,
+          }),
+        });
         const json = await res.json();
-        if (!res.ok || !json.ok) {
-          throw new Error(json.error?.message || "Không thể tải hồ sơ xuất bản.");
+        if (res.ok && json.ok && json.data) {
+          setData(json.data);
+          setError(null);
         }
-        setData(json.data);
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Lỗi tải hồ sơ xuất bản");
-      } finally {
-        setIsLoading(false);
+        // Nếu mạng có gián đoạn hoặc serverless worker khởi động lại,
+        // gói dữ liệu cục bộ đã tạo vẫn giữ nguyên trọn vẹn 100% dữ liệu bài học
+        console.warn("Lưu ý đồng bộ máy chủ (đã kích hoạt chế độ xuất bản độc lập):", err);
       }
     };
 
     fetchExport();
-  }, [project.id]);
+  }, [project, dataPack, script, storyboard, qcReport]);
 
   const handleCopy = async (type: string, text: string) => {
     try {
@@ -144,7 +187,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
           <p className="text-xs text-emerald-800 leading-relaxed">
             Hồ sơ sản xuất bao gồm đầy đủ: <strong>YCCD & Tri thức chuẩn</strong>, <strong>Kịch bản timeline phân đoạn</strong>,{" "}
             <strong>4 Phân cảnh độc lập với Prompt Veo/Flow</strong>, <strong>Khóa Master Locks</strong> và{" "}
-            <strong>Chứng nhận QC Đạt chuẩn 96/100</strong>.
+            <strong>Chứng nhận QC Đạt chuẩn sư phạm GDPT 2018</strong>.
           </p>
         </div>
       </div>
@@ -155,7 +198,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
           <div className="flex items-center gap-2">
             <button
               onClick={() => setActiveTab("MARKDOWN")}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === "MARKDOWN"
                   ? "bg-slate-900 text-white shadow-sm"
                   : "text-slate-600 hover:bg-slate-100"
@@ -167,7 +210,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
 
             <button
               onClick={() => setActiveTab("PROMPTS")}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === "PROMPTS"
                   ? "bg-slate-900 text-white shadow-sm"
                   : "text-slate-600 hover:bg-slate-100"
@@ -179,7 +222,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
 
             <button
               onClick={() => setActiveTab("JSON")}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === "JSON"
                   ? "bg-slate-900 text-white shadow-sm"
                   : "text-slate-600 hover:bg-slate-100"
@@ -197,7 +240,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                 <>
                   <button
                     onClick={() => handleCopy("MARKDOWN", data.markdown)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
                     {copiedType === "MARKDOWN" ? (
                       <>
@@ -215,7 +258,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                     onClick={() =>
                       downloadFile(`${baseFileName}.md`, data.markdown, "text/markdown;charset=utf-8")
                     }
-                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Tải file .md</span>
@@ -227,7 +270,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                 <>
                   <button
                     onClick={() => handleCopy("PROMPTS", data.promptPack)}
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
                     {copiedType === "PROMPTS" ? (
                       <>
@@ -245,7 +288,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                     onClick={() =>
                       downloadFile(`${baseFileName}_prompts.txt`, data.promptPack, "text/plain;charset=utf-8")
                     }
-                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Tải prompts.txt</span>
@@ -259,7 +302,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                     onClick={() =>
                       handleCopy("JSON", JSON.stringify(data.jsonPackage, null, 2))
                     }
-                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+                    className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                   >
                     {copiedType === "JSON" ? (
                       <>
@@ -281,7 +324,7 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
                         "application/json;charset=utf-8"
                       )
                     }
-                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm"
+                    className="px-3.5 py-1.5 rounded-lg bg-edu-600 hover:bg-edu-700 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm cursor-pointer"
                   >
                     <Download className="w-3.5 h-3.5" />
                     <span>Tải file .json</span>
@@ -303,19 +346,19 @@ export const ExportViewer: React.FC<ExportViewerProps> = ({
         ) : data ? (
           <div>
             {activeTab === "MARKDOWN" && (
-              <pre className="p-4 bg-slate-900 text-slate-100 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed">
+              <pre className="p-4 bg-slate-900 text-slate-100 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed select-text">
                 {data.markdown}
               </pre>
             )}
 
             {activeTab === "PROMPTS" && (
-              <pre className="p-4 bg-slate-900 text-emerald-400 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed">
+              <pre className="p-4 bg-slate-900 text-emerald-400 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed select-text">
                 {data.promptPack}
               </pre>
             )}
 
             {activeTab === "JSON" && (
-              <pre className="p-4 bg-slate-900 text-amber-300 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed">
+              <pre className="p-4 bg-slate-900 text-amber-300 rounded-xl text-xs font-mono whitespace-pre-wrap overflow-x-auto max-h-[500px] leading-relaxed select-text">
                 {JSON.stringify(data.jsonPackage, null, 2)}
               </pre>
             )}
